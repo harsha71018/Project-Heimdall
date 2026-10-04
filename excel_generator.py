@@ -163,7 +163,7 @@ class ExcelDashboardGenerator:
                 type="list",
                 formula1=status_list_str,
                 allow_blank=True,
-                showDropDown=True
+                showErrorMessage=True
             )
             status_dv.error = "Please select a valid application status"
             status_dv.errorTitle = "Invalid Status"
