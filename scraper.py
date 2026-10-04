@@ -182,6 +182,7 @@ class MultiPlatformJobScraper:
                     results_wanted=results_wanted,
                     hours_old=hours_old,
                     country_indeed=country_indeed,
+                    linkedin_fetch_description=True,
                     verbose=0
                 )
 
@@ -242,7 +243,7 @@ class MultiPlatformJobScraper:
             "Content-Type": "application/json"
         }
         
-        query = f'"{title}" "{location}" site:naukri.com/job-listings OR site:linkedin.com/jobs/view'
+        query = f'"{title}" "{location}" site:naukri.com/job-listings'
         
         payload: Dict[str, Any] = {
             "query": query,
