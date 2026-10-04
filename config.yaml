@@ -21,15 +21,13 @@ search:
   # Max age of job postings in hours (72h for fresh listings)
   hours_old: 72
   
-  # Target number of jobs to fetch per title via JobSpy
-  results_wanted_per_role: 20
+  # Target number of jobs to fetch per title via JobSpy (kept at 12 to prevent LinkedIn 429 rate limits)
+  results_wanted_per_role: 12
   
-  # Platforms to search across: linkedin, indeed, glassdoor, zip_recruiter
+  # Platforms to search across: linkedin, indeed
   platforms:
     - "linkedin"
     - "indeed"
-    - "glassdoor"
-    - "zip_recruiter"
     
   indeed_country: "india"
 
