@@ -26,9 +26,7 @@ echo   [2] Frugal     (  8 credits) - Quick search scan
 echo   [3] Exhaustive (~48 credits) - Deep Monday sweep
 echo =====================================================================
 choice /c 123 /t 5 /d 1 /m "Auto-selecting [1] in 5 seconds"
-if errorlevel 3 set MODE=exhaustive
-if errorlevel 2 set MODE=frugal
-if errorlevel 1 set MODE=balanced
+if errorlevel 3 (set MODE=exhaustive) else if errorlevel 2 (set MODE=frugal) else (set MODE=balanced)
 
 echo.
 echo [2/2] Launching Job Hunter Engine in [%MODE%] mode...
