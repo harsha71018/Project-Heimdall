@@ -10,7 +10,7 @@ echo.
 cd /d "%~dp0"
 
 echo [1/2] Verifying Python Environment...
-py -c "import openpyxl, pandas, jobspy, yaml, rich, dotenv" >nul 2>&1
+py -c "import openpyxl, pandas, jobspy, yaml, dotenv" >nul 2>&1
 if errorlevel 1 (
     echo Installing or updating required packages...
     py -m pip install -r requirements.txt --quiet --disable-pip-version-check
@@ -21,9 +21,9 @@ if errorlevel 1 (
 echo.
 echo =====================================================================
 echo Select Scraping Intensity for Today:
-echo   [1] Balanced   (~24 credits) - Recommended: Full Markdown on top 4 listings
-echo   [2] Frugal     (  8 credits) - Quick search scan
-echo   [3] Exhaustive (~48 credits) - Deep Monday sweep
+echo   [1] Balanced   - Recommended: Full Markdown on top listings
+echo   [2] Frugal     - Quick search scan
+echo   [3] Exhaustive - Deep sweep
 echo =====================================================================
 choice /c 123 /t 5 /d 1 /m "Auto-selecting [1] in 5 seconds"
 if errorlevel 3 (set MODE=exhaustive) else if errorlevel 2 (set MODE=frugal) else (set MODE=balanced)
