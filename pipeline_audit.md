@@ -152,29 +152,38 @@ LinkedIn's fuzzy search fills your "Data Analyst" results with: *Customer Servic
 [extractor.py L94](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/extractor.py#L94) writes `"Data Analysis, Problem Solving"` when nothing matched. An empty value tells the truth. Made-up text misleads you, and it hid the LinkedIn description bug (2.4) for this long. Show `—` or `(no JD)` instead.
 
 ### 3.7 Two platforms fail on every run
-`scheduled_run.log`: **ZipRecruiter 403** (it only covers US/Canada, so it will never work for India) and **Glassdoor 400 "location not parsed"** on all 4 roles. Remove `zip_recruiter`. Glassdoor usually works with a location like `"Hyderabad, Telangana"`, or drop it. Then **add `naukri` and `google`**, which your installed JobSpy supports natively (`Site` enum: `LINKEDIN, INDEED, ZIP_RECRUITER, GLASSDOOR, GOOGLE, BAYT, NAUKRI, BDJOBS`).
+`scheduled_run.log`: **ZipRecruiter 403** (it only covers US/Canada, so it will never work for India) and **Glassdoor 400 "location not parsed"** on all 4 roles. Remove `zip_recruiter`. Glassdoor may work with a location like `"Hyderabad, Telangana"` (not tested), or drop it.
+
+> [!WARNING]
+> **Correction (live test, 2026-10-04 22:09).** An earlier version of this audit said to "add `naukri` and `google`" because they appear in JobSpy's `Site` enum. **I tested them and they don't work from your machine:**
+> - `naukri` → **HTTP 406 `"recaptcha required"`**, 0 rows
+> - `google` → **0 rows**, both with `search_term` and with `google_search_term`
+> - `linkedin` + `linkedin_fetch_description=True` → **8/8 descriptions, 7/8 dates** ✅ (this confirms 2.4)
+>
+> So Firecrawl is currently your **only working Naukri source**. Keep it.
 
 ---
 
-## 4. Architecture and cost: you're paying for data you could get free
+## 4. Architecture and cost
 
-The Firecrawl engine exists to "reach Naukri". **JobSpy already reaches Naukri for free**, with structured fields (company, experience, posted date). Firecrawl also queries `site:linkedin.com/jobs/view`, which JobSpy already covers. So right now Firecrawl mostly duplicates the free engine, with worse data.
+~~JobSpy already reaches Naukri for free.~~ **Wrong. See the correction in 3.7.** The one real overlap: Firecrawl also queries `site:linkedin.com/jobs/view`, which JobSpy already covers better (fresher, with descriptions once 2.4 is fixed). **Remove LinkedIn from the Firecrawl query and spend those credits on Naukri plus company career sites (ATS).**
 
-Your own telemetry also argues against the mode design:
+Telemetry on the modes:
 
-| Mode | Credits | FC candidates | FC retained | Markdown hits |
-|---|---|---|---|---|
-| balanced (×4 runs) | 4–6 | **4** | 0–4 | 2 of 4 |
-| frugal | 8 | **40** | **26** | 0 |
+| Mode | Limit/role | Credits | FC candidates | FC retained | Markdown hits |
+|---|---|---|---|---|---|
+| balanced (×4 runs) | 4 | 4–6 | **4** | 0–4 | 2 of 4 |
+| frugal | 10 | 8 | **40** | **26** | 0 |
 
-**Balanced (the default) brings in about 8× fewer Firecrawl jobs than Frugal.** Asking for deep scraping inside search shrinks or slows the result set, and half the LinkedIn pages return no markdown (login wall). The README's "~24 / ~48 credits" figures also don't match the measured 4–6.
+> [!NOTE]
+> **Correction:** this comparison is weaker than first stated. Balanced asks for 4 results per role and Frugal for 10, so 2.5× of the gap is just configuration. What's actually unexplained is that Balanced got **4 candidates where it asked for 16**. Likely causes are timeouts, or scraping inside search cutting the results short, but that is a guess. The balanced runs also came from earlier code versions. Log *per-role* candidate counts and errors before blaming the mode. The README's "~24 / ~48 credits" figures still don't match the measured 4–6.
 
 ### Recommended redesign: a two-stage funnel
 Search wide and cheap, filter on free signals, and spend credits only on what's left:
 
 ```mermaid
 flowchart LR
-    A["Stage 1: Discover\nJobSpy: linkedin+indeed+naukri+google\nFirecrawl search only for gaps: ATS sites, foundit, instahyre\ntbs=qdr:w, no scrape"] --> B["Stage 2: Free filters\ncanonical ID dedupe\nseen? drop\nID-decoded age\ntitle relevance + seniority"]
+    A["Stage 1: Discover\nJobSpy: linkedin+indeed\nFirecrawl search: Naukri + ATS sites\ntbs=qdr:w, no scrape"] --> B["Stage 2: Free filters\ncanonical ID dedupe\nseen? drop\nID-decoded age\ntitle relevance + seniority"]
     B --> C["Stage 3: Enrich survivors only\nusually 5-15 jobs\nFirecrawl scrape + JSON schema\nonly where JD or exp is missing"]
     C --> D["Stage 4: Score and store\nresume-fit score\nSQLite upsert"]
     D --> E["Views: Excel tracker\n+ daily digest of NEW"]
@@ -222,7 +231,7 @@ Firecrawl is most useful for **company career pages that JobSpy can't reach**: `
 |---|---|---|---|
 | 1 | `git init` + pin deps | 5 min | Safety net for everything below |
 | 2 | Fix `run.bat` errorlevel, remove `showDropDown=True` | 5 min | Two visible bugs gone |
-| 3 | `linkedin_fetch_description=True`; swap `zip_recruiter` → `naukri`, `google` | 15 min | Gates finally get data; free Naukri |
+| 3 | `linkedin_fetch_description=True`; drop `zip_recruiter`; remove LinkedIn from the Firecrawl query | 15 min | Gates finally get data; Firecrawl credits go to Naukri only |
 | 4 | Firecrawl `tbs: qdr:w` + Naukri ID-date filter | 30 min | Stale listings removed |
 | 5 | Merge-preserving Excel (keep K/L, never delete rows) | 1–2 h | It becomes a real tracker |
 | 6 | Canonical job IDs for dedupe + seen list; prefer richer row | 1 h | Cross-engine duplicates gone |
