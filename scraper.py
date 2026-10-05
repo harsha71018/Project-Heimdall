@@ -7,6 +7,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
+from urllib.parse import urlsplit, parse_qs
 from dotenv import load_dotenv
 from jobspy import scrape_jobs
 from extractor import JobRequirementExtractor
@@ -55,12 +56,17 @@ class MultiPlatformJobScraper:
         self.timeout = mode_settings.get("timeout", 60 if self.deep_scrape else 20)
         self.max_experience_years = int(self.config.get("max_experience_years", 2))
 
-        # Per-engine retention stats and candidate count for analytics
+        # Per-engine retention stats, funnel counters, and candidate count for analytics
         self.last_run_stats = {
             "fc_candidates": 0,
             "fc_markdown_hits": 0,
             "fc_retained": 0,
-            "jobspy_retained": 0
+            "jobspy_retained": 0,
+            "dropped_stale_naukri": 0,
+            "dropped_future_naukri": 0,
+            "unparseable_naukri_dates": 0,
+            "dropped_senior_title": 0,
+            "dropped_experience_ceiling": 0,
         }
 
         # Persistent seen jobs ledger
@@ -148,11 +154,16 @@ class MultiPlatformJobScraper:
             print("\n[!] WARNING: Firecrawl is enabled in config.yaml, but FIRECRAWL_API_KEY is missing in .env.")
             print("    Skipping Firecrawl engine (Naukri/regional search) and continuing with JobSpy.\n")
 
-        # Reset candidate and retention counters at the start of each run
+        # Reset candidate, retention, and funnel counters at the start of each run
         self.last_run_stats["fc_candidates"] = 0
         self.last_run_stats["fc_markdown_hits"] = 0
         self.last_run_stats["fc_retained"] = 0
         self.last_run_stats["jobspy_retained"] = 0
+        self.last_run_stats["dropped_stale_naukri"] = 0
+        self.last_run_stats["dropped_future_naukri"] = 0
+        self.last_run_stats["unparseable_naukri_dates"] = 0
+        self.last_run_stats["dropped_senior_title"] = 0
+        self.last_run_stats["dropped_experience_ceiling"] = 0
 
         all_results = []
 
@@ -329,11 +340,56 @@ class MultiPlatformJobScraper:
             return pd.DataFrame()
 
     @staticmethod
+    def _matches_host(host: str, target_domain: str) -> bool:
+        """Strict domain boundary check: matches target_domain or its subdomains."""
+        return host == target_domain or host.endswith("." + target_domain)
+
+    @staticmethod
     def _clean_http_url(val: Any) -> Optional[str]:
-        """Returns string URL if valid non-empty http(s) string, else None (safe against NaN)."""
-        if isinstance(val, str) and val.strip().lower().startswith("http"):
-            return val.strip()
+        """Returns string URL if valid non-empty http(s) string with valid hostname, else None."""
+        if not isinstance(val, str):
+            return None
+        val = val.strip()
+        if not val:
+            return None
+        try:
+            parsed = urlsplit(val)
+            if parsed.scheme.lower() in ("http", "https") and parsed.hostname:
+                return val
+        except Exception:
+            return None
         return None
+
+    # Dedicated ATS platforms with required individual job page path patterns
+    KNOWN_ATS_JOB_PATTERNS = {
+        "greenhouse.io": r'/[a-zA-Z0-9_-]+/jobs/\d+',
+        "lever.co": r'/[a-zA-Z0-9_-]+/[0-9a-fA-F-]{8,}(?:/apply)?',
+        "myworkdayjobs.com": r'(?:/[a-zA-Z0-9_.-]+){1,3}/job/(?:[^/]+/)?(?:[a-zA-Z0-9_.-]+_)?[a-zA-Z0-9_-]+',
+        "myworkdaysite.com": r'(?:/[a-zA-Z0-9_.-]+){1,3}/job/(?:[^/]+/)?(?:[a-zA-Z0-9_.-]+_)?[a-zA-Z0-9_-]+',
+        "smartrecruiters.com": r'/[a-zA-Z0-9_-]+/\d{8,}(?:-[a-zA-Z0-9_-]+)?',
+        "ashbyhq.com": r'/[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]{8,}(?:/application)?',
+        "taleo.net": r'/careersection/[^/]+/jobdetail\.ftl',
+        "icims.com": r'/jobs/\d+/(?:[a-zA-Z0-9_-]+/)?job',
+        "keka.com": r'/careers/jobdetails/[a-zA-Z0-9_-]+',
+        "workable.com": r'(?:/[a-zA-Z0-9_-]+)?/j/[0-9a-zA-Z]{6,}',
+    }
+
+    # Enterprise career portals with required individual job page patterns
+    KNOWN_ENTERPRISE_PORTALS = {
+        "careers.google.com": r'/jobs/results/\d+(?:-[a-zA-Z0-9_-]+)?',
+        "amazon.jobs": r'(?:/[a-zA-Z]{2})?/jobs/\d+(?:/[a-zA-Z0-9_-]+)?',
+        "careers.microsoft.com": r'(?:/professionals|/careers)?(?:/[a-zA-Z]{2}(?:/[a-zA-Z]{2})?)?/job/\d+(?:/[a-zA-Z0-9_-]+)?',
+        "wipro.com": r'/job/[^/]+/\d+(?:-[a-zA-Z_]+)?',
+        "hcltech.com": r'/job/[^/]+/\d+(?:-[a-zA-Z_]+)?',
+        "hsbc.com": r'/job/[^/]+/\d+',
+        "micron.com": r'(?:/careers)?/job/\d+',
+        "trinet.com": r'(?:/careers)?/job/\d+',
+        "pepsicojobs.com": r'/jobs/\d+/(?:[a-zA-Z0-9_-]+/)?job',
+        "infor.com": r'/postings/[0-9a-fA-F-]{36}',
+        "oraclecloud.com": r'/hcmUI/CandidateExperience/[a-zA-Z]{2}/sites/[^/]+/requisitions/preview/\d+',
+        "deloitte.com": r'/(?:[a-zA-Z]{2}_[a-zA-Z]{2}/)?careersUSI/JobDetail/[^/]+/\d+',
+        "ttcportals.com": r'/jobs/\d+-[a-zA-Z0-9_-]+',
+    }
 
     def _row_has_valid_direct_url(self, r: Any) -> bool:
         """Checks if either job_url_direct or job_url is a valid direct job listing."""
@@ -347,9 +403,21 @@ class MultiPlatformJobScraper:
     def _is_direct_job_url(self, url: str) -> bool:
         """
         Validates whether a URL points directly to an individual job application page.
+        Fail-closed default: rejects unknown hosts, search pages, non-job paths, and trailing garbage.
         """
-        if not url or not isinstance(url, str) or not url.startswith("http"):
+        clean_url = self._clean_http_url(url)
+        if not clean_url:
             return False
+
+        try:
+            parsed = urlsplit(clean_url)
+            query_params = parse_qs(parsed.query)
+        except Exception:
+            return False
+
+        host = (parsed.hostname or "").lower()
+        path = parsed.path.rstrip('/')
+        u_lower = clean_url.lower()
 
         disallowed_patterns = [
             "-jobs-in-", "-vacancies-in-", "/jobs-in-", "job-vacancies", 
@@ -357,37 +425,92 @@ class MultiPlatformJobScraper:
             "tcs-power-bi-jobs", "analyst-jobs", "developer-jobs",
             "/jobs-search", "/jobs?search="
         ]
-        if any(bad in url for bad in disallowed_patterns):
+        if any(bad in u_lower for bad in disallowed_patterns):
             return False
 
-        # 1. Naukri Direct Job (requires numeric job ID at end)
-        if "naukri.com" in url:
-            return bool(re.search(r'/job-listings-.+?-\d{10,14}$', url))
+        # 1. Naukri Direct Job (requires numeric ID at end of path)
+        if self._matches_host(host, "naukri.com"):
+            return bool(re.fullmatch(r'/job-listings-[a-zA-Z0-9_-]+-\d{10,14}', path))
 
         # 2. LinkedIn Direct Job
-        if "linkedin.com" in url:
-            return bool(re.search(r'/jobs/view/(?:.+?-)?\d+', url))
+        if self._matches_host(host, "linkedin.com"):
+            return bool(re.fullmatch(r'/jobs/view/(?:[a-zA-Z0-9_-]+-)?\d+', path))
 
-        # 3. Indeed Direct Job
-        if "indeed.com" in url:
-            return ('/viewjob' in url or bool(re.search(r'/job/[^/?]+-[a-f0-9]{16}', url)))
+        # 3. Indeed Direct Job (validates full hex token on viewjob path or direct hash slug)
+        if self._matches_host(host, "indeed.com"):
+            jk_vals = query_params.get("jk", [])
+            has_valid_jk = bool(jk_vals and re.fullmatch(r'[a-f0-9]{16}', jk_vals[0], re.I))
+            is_viewjob_path = bool(re.fullmatch(r'/(?:m/)?viewjob|/rc/clk', path))
+            is_direct_slug = bool(re.fullmatch(r'/job/[a-zA-Z0-9_-]+-[a-f0-9]{16}', path))
+            return (has_valid_jk and is_viewjob_path) or is_direct_slug
 
         # 4. Glassdoor Direct Job
-        if "glassdoor." in url:
-            return any(k in url.lower() for k in ["joblisting", "job-listing", "jl=", "/job/"])
+        if self._matches_host(host, "glassdoor.com") or self._matches_host(host, "glassdoor.co.in"):
+            jl_vals = query_params.get("jl", [])
+            has_valid_jl = bool(jl_vals and re.fullmatch(r'\d+', jl_vals[0]))
+            is_listing_path = bool(re.fullmatch(r'/job-listing/[a-zA-Z0-9_-]+', path))
+            is_htm_path = bool(re.fullmatch(r'/job/[a-zA-Z0-9_-]+\.htm', path, re.I))
+            return (has_valid_jl and is_listing_path) or is_htm_path
 
-        # 5. ZipRecruiter Direct Job
-        if "ziprecruiter." in url or "zipapply." in url:
-            u_lower = url.lower()
-            return ("lvk=" in u_lower or "/jobs//" in u_lower or "/job/" in u_lower or "/c/" in u_lower or "zipapply.com" in u_lower)
+        # 5. ZipRecruiter & ZipApply Direct Job
+        if self._matches_host(host, "ziprecruiter.com"):
+            return bool(
+                re.fullmatch(r'/jobs/(?:[a-zA-Z0-9_-]*/)?\d+', path) or
+                re.fullmatch(r'/job/[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+', path) or
+                re.fullmatch(r'/c/[a-zA-Z0-9_-]+/job/[a-zA-Z0-9_-]+', path) or
+                re.fullmatch(r'/k/job/[a-zA-Z0-9_-]+', path)
+            )
+        if self._matches_host(host, "zipapply.com"):
+            return bool(re.fullmatch(r'/(?:job|jobs|apply)/[a-zA-Z0-9_-]+', path))
 
-        # 6. Direct ATS / Company Career URLs
-        ats_keywords = [
-            'workday', 'taleo', 'icims', 'greenhouse', 'lever', 
-            'keka', 'smartrecruiters', 'careers.', 'jobs.', '/job/', '/careers/'
-        ]
-        if any(ats in url for ats in ats_keywords):
-            return True
+        # 6. BambooHR (query id validation or numeric career path)
+        if self._matches_host(host, "bamboohr.com"):
+            if re.fullmatch(r'/careers/\d+', path):
+                return True
+            id_vals = query_params.get("id", [])
+            if path == '/jobs/view.php' and id_vals and re.fullmatch(r'\d+', id_vals[0]):
+                return True
+            return False
+
+        # 7. Accenture (requires job id query parameter)
+        if self._matches_host(host, "accenture.com"):
+            id_vals = query_params.get("id", [])
+            return bool(
+                id_vals and re.fullmatch(r'[a-zA-Z0-9_-]+', id_vals[0]) and
+                re.fullmatch(r'/(?:[a-zA-Z]{2}-[a-zA-Z]{2}/)?careers/jobdetails', path, re.IGNORECASE)
+            )
+
+        # 8. Infosys (requires jobReferenceCode query parameter)
+        if self._matches_host(host, "infosys.com"):
+            ref_vals = query_params.get("jobReferenceCode", [])
+            return bool(
+                ref_vals and re.fullmatch(r'[a-zA-Z0-9_-]+', ref_vals[0]) and
+                re.fullmatch(r'/jobdesc', path, re.IGNORECASE)
+            )
+
+        # 9. Njoyn ATS (requires page=jobdetails and JobID parameter)
+        if self._matches_host(host, "njoyn.com"):
+            page_vals = query_params.get("page", [])
+            job_vals = query_params.get("JobID", [])
+            return bool(
+                page_vals == ["jobdetails"] and job_vals and
+                re.fullmatch(r'[a-zA-Z0-9_-]+', job_vals[0]) and
+                re.fullmatch(r'/corp/xweb/XWeb\.asp', path, re.IGNORECASE)
+            )
+
+        # 10. Dedicated ATS Providers
+        for ats_domain, pattern in self.KNOWN_ATS_JOB_PATTERNS.items():
+            if self._matches_host(host, ats_domain):
+                if ats_domain == "taleo.net":
+                    job_vals = query_params.get("job", [])
+                    has_valid_job = bool(job_vals and re.fullmatch(r'\d+', job_vals[0]))
+                    return has_valid_job and bool(re.fullmatch(pattern, path, re.IGNORECASE))
+                return bool(re.fullmatch(pattern, path, re.IGNORECASE))
+
+        # 11. Enterprise Portals
+        for portal_domain, pattern in self.KNOWN_ENTERPRISE_PORTALS.items():
+            if self._matches_host(host, portal_domain):
+                return bool(re.fullmatch(pattern, path, re.IGNORECASE))
 
         return False
 
@@ -397,7 +520,8 @@ class MultiPlatformJobScraper:
         company = "Hiring Company"
 
         if site == "Naukri":
-            m = re.search(r'/job-listings-(.+?)-\d{10,14}$', url)
+            path = urlsplit(url).path.rstrip('/')
+            m = re.search(r'/job-listings-(.+?)-\d{10,14}$', path)
             if m:
                 slug = m.group(1).lower()
                 slug = re.sub(r'-\d+-to-\d+-years?', '', slug)
@@ -471,11 +595,17 @@ class MultiPlatformJobScraper:
         Finding 1 Fix: Extracts authoritative ground-truth experience range from Naukri URL slug.
         e.g., ...careernet-hyderabad-5-to-8-years-120626011886 -> '5 - 8 Years'
         """
-        if "naukri.com" not in url:
+        try:
+            parsed = urlsplit((url or "").strip())
+            host = (parsed.hostname or "").lower()
+            if not self._matches_host(host, "naukri.com"):
+                return None
+            path = parsed.path.rstrip('/')
+            m = re.search(r'-(\d{1,2})-to-(\d{1,2})-years?-', path.lower())
+            if m:
+                return f"{m.group(1)} - {m.group(2)} Years"
+        except Exception:
             return None
-        m = re.search(r'-(\d{1,2})-to-(\d{1,2})-years?-', url.lower())
-        if m:
-            return f"{m.group(1)} - {m.group(2)} Years"
         return None
 
     @staticmethod
@@ -483,14 +613,19 @@ class MultiPlatformJobScraper:
         """
         Decodes the DDMMYY creation date prefix embedded in Naukri trailing job IDs.
         e.g., job-listings-...-150225005334 -> 15-02-25 (Feb 15, 2025).
-        Returns datetime object if valid date, else None.
+        Returns datetime object if valid calendar date, else None.
         """
-        m = re.search(r'-(\d{6})\d{4,8}$', url)
-        if not m:
-            return None
         try:
+            parsed = urlsplit(url.strip())
+            host = (parsed.hostname or "").lower()
+            if not (host == "naukri.com" or host.endswith(".naukri.com")):
+                return None
+            path = parsed.path.rstrip('/')
+            m = re.search(r'-(\d{6})\d{4,8}$', path)
+            if not m:
+                return None
             return datetime.strptime(m.group(1), "%d%m%y")
-        except ValueError:
+        except Exception:
             return None
 
     def _within_ceiling(self, exp_str: str, max_years: int = 2) -> bool:
@@ -501,20 +636,40 @@ class MultiPlatformJobScraper:
         """
         if not exp_str or exp_str in ["Not Specified", "General Requirements"]:
             return True
-        
+
         exp_lower = exp_str.lower()
         if any(k in exp_lower for k in ["fresher", "intern", "entry", "trainee", "new grad", "graduate"]):
             return True
 
-        # Match ranges like "5 - 8 Years", "3 to 5 years"
-        m_range = re.search(r'(\d+)\s*(?:-|to)\s*(\d+)', exp_lower)
-        if m_range:
-            return int(m_range.group(1)) <= max_years
+        # 1. Forward Mixed Unit Range: "6 months to 1 year" -> min = 6/12 = 0.5 yrs
+        m_mixed = re.search(r'(\d+(?:\.\d+)?)\s*(?:months?|mos?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?)', exp_lower)
+        if m_mixed:
+            return (float(m_mixed.group(1)) / 12.0) <= max_years
 
-        # Match plus forms like "5+ Years", "6+ yrs", "11+ Years"
-        m_plus = re.search(r'(\d+)\+?\s*(?:years?|yrs?)', exp_lower)
+        # 2. Reverse Mixed Unit Range: "1 year to 36 months" -> min = 1.0 yrs
+        m_rev_mixed = re.search(r'(\d+(?:\.\d+)?)\s*(?:years?|yrs?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(?:months?|mos?)', exp_lower)
+        if m_rev_mixed:
+            return float(m_rev_mixed.group(1)) <= max_years
+
+        # 3. Month Range: "3 - 6 months" -> min = 3/12 = 0.25 yrs
+        m_mrange = re.search(r'(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(?:months?|mos?)', exp_lower)
+        if m_mrange:
+            return (float(m_mrange.group(1)) / 12.0) <= max_years
+
+        # 4. Single / Plus Months: "6 months", "6+ mos" -> min = 6/12 = 0.5 yrs
+        m_msingle = re.search(r'(\d+(?:\.\d+)?)\+?\s*(?:months?|mos?)', exp_lower)
+        if m_msingle:
+            return (float(m_msingle.group(1)) / 12.0) <= max_years
+
+        # 5. Year Range: "0.5 - 2 Years", "2 to 4 years"
+        m_range = re.search(r'(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?)', exp_lower)
+        if m_range:
+            return float(m_range.group(1)) <= max_years
+
+        # 6. Single / Plus Years: "1.5+ Years", "5+ yrs"
+        m_plus = re.search(r'(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?)', exp_lower)
         if m_plus:
-            return int(m_plus.group(1)) <= max_years
+            return float(m_plus.group(1)) <= max_years
 
         return True
 
@@ -551,7 +706,8 @@ class MultiPlatformJobScraper:
         - Cross-run freshness tracker (🟢 NEW vs ⚪ SEEN)
         """
         enriched_rows = []
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().date()
+        today_str = today.strftime("%Y-%m-%d")
 
         for _, row in df.iterrows():
             job_dict = row.to_dict()
@@ -568,15 +724,27 @@ class MultiPlatformJobScraper:
 
             # Finding: Drop stale Naukri postings older than 30 days
             naukri_date = None
-            if "naukri.com" in final_url_str:
+            date_status = None
+            final_host = (urlsplit(final_url_str).hostname or "").lower() if final_url_str else ""
+            if self._matches_host(final_host, "naukri.com"):
                 naukri_date = self._naukri_posted_date(final_url_str)
-                if naukri_date:
-                    age_days = (datetime.now() - naukri_date).days
-                    if age_days > 30:
+                if naukri_date is not None:
+                    post_date = naukri_date.date()
+                    if post_date > today:
+                        self.last_run_stats["dropped_future_naukri"] += 1
                         continue
+                    age_days = (today - post_date).days
+                    if age_days > 30:
+                        self.last_run_stats["dropped_stale_naukri"] += 1
+                        continue
+                    date_status = "parsed"
+                else:
+                    self.last_run_stats["unparseable_naukri_dates"] += 1
+                    date_status = "unparseable"
 
             # Amendment 1 Gate: Drop senior/lead/management roles before slug/ceiling checks
             if self.max_experience_years <= 2 and self._is_senior_title(str(job_dict.get("title", "")), final_url_str):
+                self.last_run_stats["dropped_senior_title"] += 1
                 continue
 
             # Finding 1: Check authoritative Naukri slug ground-truth first
@@ -585,6 +753,7 @@ class MultiPlatformJobScraper:
 
             # Finding 1 Gate: Drop if minimum experience requirement exceeds ceiling
             if not self._within_ceiling(final_exp, max_years=self.max_experience_years):
+                self.last_run_stats["dropped_experience_ceiling"] += 1
                 continue
 
             # Feature 2: Cross-run freshness tagging
@@ -607,6 +776,8 @@ class MultiPlatformJobScraper:
                 job_dict["formatted_date"] = str(date_val)
             elif naukri_date:
                 job_dict["formatted_date"] = naukri_date.strftime("%Y-%m-%d")
+            elif date_status == "unparseable":
+                job_dict["formatted_date"] = "Unverified (Date Parse Failed)"
             else:
                 job_dict["formatted_date"] = "Recent"
 

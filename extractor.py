@@ -41,6 +41,21 @@ class JobRequirementExtractor:
                 
         return matched_skills
 
+    COMPANY_SUBJECT_MARKERS = [
+        "we have", "our company", "with over", "with more than",
+        "history of", "legacy of", "celebrating", "founded in",
+        "in business for", "operating for"
+    ]
+    COMPANY_POST_MARKERS = [
+        "in the industry", "in industry", "in business", "of excellence",
+        "serving clients", "track record", "market leader"
+    ]
+
+    NEGATIVE_FRESHER_PATTERN = re.compile(
+        r'\b(?:no\s+freshers?|freshers?\s+(?:need\s+not|not|do\s+not|should\s+not)\s+apply|freshers?\s+please\s+excuse)\b',
+        re.IGNORECASE
+    )
+
     def extract_experience(self, description: str) -> str:
         """Extract experience requirement (e.g. '0-2 years', 'Fresher', 'Entry-Level')."""
         if not description or not isinstance(description, str):
@@ -48,23 +63,49 @@ class JobRequirementExtractor:
 
         desc_lower = description.lower()
 
-        # 1. Check numeric experience patterns first (e.g., "0 to 2 years", "3-5 yrs", "5+ years")
-        patterns = [
-            r'(\d+(?:\.\d+)?\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?))',
-            r'(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?)\s*(?:of\s*)?(?:relevant\s*)?experience)',
-            r'((?:minimum|min|at least)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?))',
-            r'(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?))'
+        # Tier 1: Explicit candidate requirement expressions (prefixed by requirement verbs)
+        req_prefixed_patterns = [
+            r'(?:(?:minimum|min|at least|requires?|requiring|requirement|must have|should have|looking for|seeking|position requires|role requires)\s+)(\d+(?:\.\d+)?\s*(?:months?|mos?)\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?))',
+            r'(?:(?:minimum|min|at least|requires?|requiring|requirement|must have|should have|looking for|seeking|position requires|role requires)\s+)(\d+(?:\.\d+)?\s*(?:years?|yrs?)\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:months?|mos?))',
+            r'(?:(?:minimum|min|at least|requires?|requiring|requirement|must have|should have|looking for|seeking|position requires|role requires)\s+)(\d+(?:\.\d+)?\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?|months?|mos?))',
+            r'(?:(?:minimum|min|at least|requires?|requiring|requirement|must have|should have|looking for|seeking|position requires|role requires)\s+)(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?|months?|mos?)(?:\s+(?:of\s+)?(?:relevant\s+)?exp(?:erience)?)?)',
         ]
+        for p in req_prefixed_patterns:
+            m = re.search(p, desc_lower)
+            if m:
+                return m.group(1).strip().title()
 
-        for p in patterns:
-            match = re.search(p, desc_lower)
-            if match:
-                exp_str = match.group(1).strip()
-                return exp_str.title()
+        def is_company_heritage(start_idx: int, end_idx: int) -> bool:
+            pre = desc_lower[max(0, start_idx - 35):start_idx]
+            post = desc_lower[end_idx:min(len(desc_lower), end_idx + 35)]
+            return any(s in pre for s in self.COMPANY_SUBJECT_MARKERS) or any(s in post for s in self.COMPANY_POST_MARKERS)
 
-        # 2. Check for fresher/intern terms ONLY when no numeric requirement was found
-        if re.search(r'\b(fresher|freshers|entry[-\s]?level|new grad|college graduate|intern|internship|trainee)\b', desc_lower):
-            return "0 - 1 Yrs (Entry / Fresher)"
+        # Tier 2: Unprefixed ranges (ranges are candidate requirements, not company age)
+        range_patterns = [
+            r'(\d+(?:\.\d+)?\s*(?:months?|mos?)\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?))',
+            r'(\d+(?:\.\d+)?\s*(?:years?|yrs?)\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:months?|mos?))',
+            r'(\d+(?:\.\d+)?\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?))',
+            r'(\d+(?:\.\d+)?\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:months?|mos?))',
+        ]
+        for p in range_patterns:
+            for m in re.finditer(p, desc_lower):
+                if not is_company_heritage(m.start(), m.end()):
+                    return m.group(1).strip().title()
+
+        # Tier 3: Unprefixed single/plus numbers (evaluated BEFORE fresher keywords)
+        numeric_patterns = [
+            r'(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?|months?|mos?)\s*(?:[\'’]s?\s*)?(?:of\s+)?(?:relevant\s+)?exp(?:erience)?)',
+            r'(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?|months?|mos?))'
+        ]
+        for p in numeric_patterns:
+            for m in re.finditer(p, desc_lower):
+                if not is_company_heritage(m.start(), m.end()):
+                    return m.group(1).strip().title()
+
+        # Tier 4: Fresher / Entry keywords (only when no valid numeric requirement was found)
+        if not self.NEGATIVE_FRESHER_PATTERN.search(desc_lower):
+            if re.search(r'\b(fresher|freshers|entry[-\s]?level|new grad|college graduate|intern|internship|trainee)\b', desc_lower):
+                return "0 - 1 Yrs (Entry / Fresher)"
 
         return "Not Specified"
 

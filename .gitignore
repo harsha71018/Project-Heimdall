@@ -41,3 +41,4 @@ run_log.csv
 .backups/
 *.zip
 *_backup.*
+/audit_phase1/
