@@ -39,3 +39,4 @@ Job_Applications_Tracker*.xlsx
 seen_jobs.json
 run_log.csv
 .backups/
+*.zip
