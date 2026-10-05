@@ -1,6 +1,6 @@
 # 🎯 Automated Multi-Platform Job Hunter & Application Tracker
 
-An enterprise-grade, privacy-first job aggregation and tracking engine. It automatically discovers, validates, and filters job postings across **5 major platforms** (**LinkedIn, Indeed, Glassdoor, ZipRecruiter, and Naukri**), enriches listings with extracted skills, eliminates senior roles for 0–2 YOE freshers, tracks lead freshness, and builds a styled, interactive **Excel Application Dashboard** with native **"Apply Now"** buttons and status dropdowns.
+An automated job aggregation and tracking engine. It automatically discovers, validates, and filters job postings across **major platforms** (**LinkedIn, Indeed, and Naukri**), enriches listings with extracted skills, eliminates senior roles for 0–2 YOE freshers, tracks lead freshness, and builds a styled, interactive **Excel Application Dashboard** with native **"Apply Now"** buttons and status dropdowns.
 
 ---
 
@@ -22,7 +22,7 @@ An enterprise-grade, privacy-first job aggregation and tracking engine. It autom
 ```mermaid
 flowchart TD
     A["User launches run.bat / Task Scheduler"] --> B{"Choose Mode<br/>(Frugal / Balanced / Exhaustive)"}
-    B --> C["Local JobSpy Engine<br/>(LinkedIn, Indeed, Glassdoor, ZipRecruiter)"]
+    B --> C["Local JobSpy Engine<br/>(LinkedIn, Indeed)"]
     B --> D["Firecrawl Search v2 Engine<br/>(Naukri & Direct Portals)"]
     C --> E["URL Sanitizer & Deduplication"]
     D --> E
@@ -34,7 +34,7 @@ flowchart TD
 ```
 
 1. **Dual Scraping Engines**:
-   - **JobSpy (Free, Local)**: Queries LinkedIn, Indeed, Glassdoor, and ZipRecruiter directly.
+   - **JobSpy (Free, Local)**: Queries LinkedIn and Indeed directly.
    - **Firecrawl Search v2 (Cloud)**: Targets direct Naukri listing paths and corporate career boards with optional full markdown parsing.
 2. **Strict Quality Gating**:
    - Extracts real experience requirements from Naukri URL slugs (`-1-to-2-years-`) and description bodies.
@@ -92,7 +92,7 @@ Ensure Python 3.10+ (tested and verified up to Python 3.13) is installed.
    ```env
    FIRECRAWL_API_KEY=fc-YOUR_API_KEY_HERE
    ```
-> **Note**: If you don't provide an API key, the tool will gracefully skip Firecrawl and still scrape LinkedIn, Indeed, Glassdoor, and ZipRecruiter for **100% free**!
+> **Note**: If you don't provide an API key, the tool will gracefully skip Firecrawl and still scrape LinkedIn and Indeed for **100% free**!
 
 ### Step 3: Run the Tool!
 - **Windows**: Just double-click **`run.bat`**.
@@ -129,14 +129,12 @@ search:
   hours_old: 72
 
   # Target results per role from JobSpy
-  results_wanted_per_role: 20
+  results_wanted_per_role: 12
 
   # Job boards to search
   platforms:
     - "linkedin"
     - "indeed"
-    - "glassdoor"
-    - "zip_recruiter"
 
   indeed_country: "india"
 
@@ -245,11 +243,7 @@ job_automation/
 - **Cause**: `Job_Applications_Tracker.xlsx` is currently open in Microsoft Excel while the script is running.
 - **Solution**: The engine automatically catches this and saves to `Job_Applications_Tracker_Latest.xlsx` instead of crashing. Simply close Excel and run again.
 
-### 2. Glassdoor 400 or ZipRecruiter 403 Errors in Console
-- **Cause**: Anti-bot Cloudflare rate limits on certain aggregators.
-- **Solution**: The scraper handles these errors gracefully and continues gathering postings from LinkedIn, Indeed, and Naukri.
-
-### 3. Missing Dependencies
+### 2. Missing Dependencies
 - Run:
   ```cmd
   py -m pip install -r requirements.txt
