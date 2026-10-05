@@ -48,16 +48,12 @@ class JobRequirementExtractor:
 
         desc_lower = description.lower()
 
-        # Check for fresher/intern terms
-        if re.search(r'\b(fresher|freshers|entry[-\s]?level|new grad|college graduate|intern|internship|trainee)\b', desc_lower):
-            return "0 - 1 Yrs (Entry / Fresher)"
-
-        # Common experience patterns (e.g., "0 to 2 years", "1-3 yrs", "0-2 yrs", "minimum 1 year")
+        # 1. Check numeric experience patterns first (e.g., "0 to 2 years", "3-5 yrs", "5+ years")
         patterns = [
-            r'(\d+\s*(?:-|to)\s*\d+\s*(?:years?|yrs?))',
-            r'(\d+\+?\s*(?:years?|yrs?)\s*(?:of\s*)?(?:relevant\s*)?experience)',
-            r'((?:minimum|min|at least)\s*\d+\s*(?:years?|yrs?))',
-            r'(\d+\+?\s*(?:years?|yrs?))'
+            r'(\d+(?:\.\d+)?\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?))',
+            r'(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?)\s*(?:of\s*)?(?:relevant\s*)?experience)',
+            r'((?:minimum|min|at least)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?))',
+            r'(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?))'
         ]
 
         for p in patterns:
@@ -65,6 +61,10 @@ class JobRequirementExtractor:
             if match:
                 exp_str = match.group(1).strip()
                 return exp_str.title()
+
+        # 2. Check for fresher/intern terms ONLY when no numeric requirement was found
+        if re.search(r'\b(fresher|freshers|entry[-\s]?level|new grad|college graduate|intern|internship|trainee)\b', desc_lower):
+            return "0 - 1 Yrs (Entry / Fresher)"
 
         return "Not Specified"
 

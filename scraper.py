@@ -245,7 +245,8 @@ class MultiPlatformJobScraper:
         
         payload: Dict[str, Any] = {
             "query": query,
-            "limit": limit
+            "limit": limit,
+            "tbs": "qdr:w"
         }
 
         if self.deep_scrape:
@@ -477,6 +478,21 @@ class MultiPlatformJobScraper:
             return f"{m.group(1)} - {m.group(2)} Years"
         return None
 
+    @staticmethod
+    def _naukri_posted_date(url: str) -> Optional[datetime]:
+        """
+        Decodes the DDMMYY creation date prefix embedded in Naukri trailing job IDs.
+        e.g., job-listings-...-150225005334 -> 15-02-25 (Feb 15, 2025).
+        Returns datetime object if valid date, else None.
+        """
+        m = re.search(r'-(\d{6})\d{4,8}$', url)
+        if not m:
+            return None
+        try:
+            return datetime.strptime(m.group(1), "%d%m%y")
+        except ValueError:
+            return None
+
     def _within_ceiling(self, exp_str: str, max_years: int = 2) -> bool:
         """
         Finding 1 Fix: Gates rows against max experience ceiling.
@@ -550,6 +566,15 @@ class MultiPlatformJobScraper:
             else:
                 final_url_str = u_direct or u_job or ""
 
+            # Finding: Drop stale Naukri postings older than 30 days
+            naukri_date = None
+            if "naukri.com" in final_url_str:
+                naukri_date = self._naukri_posted_date(final_url_str)
+                if naukri_date:
+                    age_days = (datetime.now() - naukri_date).days
+                    if age_days > 30:
+                        continue
+
             # Amendment 1 Gate: Drop senior/lead/management roles before slug/ceiling checks
             if self.max_experience_years <= 2 and self._is_senior_title(str(job_dict.get("title", "")), final_url_str):
                 continue
@@ -578,7 +603,12 @@ class MultiPlatformJobScraper:
             job_dict["final_apply_url"] = final_url_str
 
             date_val = row.get("date_posted")
-            job_dict["formatted_date"] = str(date_val) if pd.notna(date_val) else "Recent"
+            if pd.notna(date_val) and str(date_val).strip() not in ["", "Recent"]:
+                job_dict["formatted_date"] = str(date_val)
+            elif naukri_date:
+                job_dict["formatted_date"] = naukri_date.strftime("%Y-%m-%d")
+            else:
+                job_dict["formatted_date"] = "Recent"
 
             enriched_rows.append(job_dict)
 
