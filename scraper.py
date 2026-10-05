@@ -169,9 +169,10 @@ class MultiPlatformJobScraper:
                 time.sleep(1)
 
         # -------------------------------------------------------------
-        # 2. Local JobSpy Engine (LinkedIn, Indeed, Glassdoor, ZipRecruiter)
+        # 2. Local JobSpy Engine
         # -------------------------------------------------------------
-        print("\n[*] [JobSpy Engine] Querying multi-board direct feeds (LinkedIn, Indeed, Glassdoor, ZipRecruiter)...")
+        platforms_str = ", ".join(p.capitalize() for p in platforms)
+        print(f"\n[*] [JobSpy Engine] Querying multi-board direct feeds ({platforms_str})...")
         for idx, title in enumerate(job_titles):
             print(f"[*] [Scraping] Searching for '{title}' in '{location}' across {platforms}...")
             try:
