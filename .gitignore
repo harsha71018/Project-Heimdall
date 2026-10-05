@@ -40,3 +40,4 @@ seen_jobs.json
 run_log.csv
 .backups/
 *.zip
+*_backup.*
