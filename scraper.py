@@ -188,10 +188,7 @@ class MultiPlatformJobScraper:
                 )
 
                 if jobs_df is not None and not jobs_df.empty:
-                    valid_mask = jobs_df.apply(
-                        lambda r: self._is_direct_job_url(r.get("job_url_direct") or r.get("job_url")), 
-                        axis=1
-                    )
+                    valid_mask = jobs_df.apply(self._row_has_valid_direct_url, axis=1)
                     clean_df = jobs_df[valid_mask].copy()
                     if not clean_df.empty:
                         clean_df["search_query"] = title
@@ -329,6 +326,22 @@ class MultiPlatformJobScraper:
         except Exception as e:
             print(f"   [!] Firecrawl Search Error: {str(e)}")
             return pd.DataFrame()
+
+    @staticmethod
+    def _clean_http_url(val: Any) -> Optional[str]:
+        """Returns string URL if valid non-empty http(s) string, else None (safe against NaN)."""
+        if isinstance(val, str) and val.strip().lower().startswith("http"):
+            return val.strip()
+        return None
+
+    def _row_has_valid_direct_url(self, r: Any) -> bool:
+        """Checks if either job_url_direct or job_url is a valid direct job listing."""
+        u_direct = self._clean_http_url(r.get("job_url_direct"))
+        u_job = self._clean_http_url(r.get("job_url"))
+        return bool(
+            (u_direct and self._is_direct_job_url(u_direct)) or 
+            (u_job and self._is_direct_job_url(u_job))
+        )
 
     def _is_direct_job_url(self, url: str) -> bool:
         """
@@ -528,10 +541,14 @@ class MultiPlatformJobScraper:
             job_dict = row.to_dict()
             extracted_info = self.extractor.process_job(job_dict)
             
-            direct_url = row.get("job_url_direct")
-            general_url = row.get("job_url")
-            final_url = direct_url if (isinstance(direct_url, str) and direct_url.startswith("http")) else general_url
-            final_url_str = final_url if isinstance(final_url, str) else ""
+            u_direct = self._clean_http_url(row.get("job_url_direct"))
+            u_job = self._clean_http_url(row.get("job_url"))
+            if u_direct and self._is_direct_job_url(u_direct):
+                final_url_str = u_direct
+            elif u_job and self._is_direct_job_url(u_job):
+                final_url_str = u_job
+            else:
+                final_url_str = u_direct or u_job or ""
 
             # Amendment 1 Gate: Drop senior/lead/management roles before slug/ceiling checks
             if self.max_experience_years <= 2 and self._is_senior_title(str(job_dict.get("title", "")), final_url_str):
