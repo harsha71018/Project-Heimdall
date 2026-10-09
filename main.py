@@ -273,9 +273,9 @@ def main():
         sys.exit(0)
 
     # 2. Build Formatted Excel Tracker
-    output_filename = config.get("output", {}).get("filename", "Job_Applications_Tracker.xlsx")
+    output_filename = args.output if args.output else None
     dashboard_gen = ExcelDashboardGenerator(config)
-    generated_file = dashboard_gen.generate(enriched_jobs_df, output_path=output_filename)
+    generated_file = dashboard_gen.generate(enriched_jobs_df, output_path=output_filename, run_stats=row_data)
 
     # 3. Print Summary Box
     print("\n" + "=" * 70)
