@@ -7,7 +7,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit, urlunsplit, parse_qs, parse_qsl, urlencode
 from dotenv import load_dotenv
 from jobspy import scrape_jobs
 from extractor import JobRequirementExtractor
@@ -16,6 +16,43 @@ from extractor import JobRequirementExtractor
 load_dotenv()
 
 logger = logging.getLogger("JobScraper")
+
+IDENTITY_QUERY_PARAMS = {
+    "jk", "jl", "id", "jobreferencecode", "jobid", "page", "job"
+}
+
+
+def canonicalize_job_url(url: str) -> str:
+    """
+    Normalizes a job URL while preserving platform-required identity query parameters
+    (Indeed ?jk=, Glassdoor ?jl=, BambooHR/Accenture ?id=, Infosys ?jobReferenceCode=, etc.).
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    raw = url.strip()
+    if not raw.lower().startswith(("http://", "https://")):
+        return ""
+    try:
+        parsed = urlsplit(raw)
+        if not parsed.scheme or not parsed.hostname:
+            return ""
+        kept_params = [
+            (k.lower(), v.strip().lower())
+            for k, v in parse_qsl(parsed.query, keep_blank_values=False)
+            if k.lower() in IDENTITY_QUERY_PARAMS
+        ]
+        kept_params.sort()
+        clean_path = parsed.path.rstrip("/").lower()
+        return urlunsplit((
+            parsed.scheme.lower(),
+            parsed.hostname.lower(),
+            clean_path,
+            urlencode(kept_params),
+            ""
+        ))
+    except Exception:
+        return re.sub(r'\?.*$', '', raw).strip().lower()
+
 
 class MultiPlatformJobScraper:
     """
@@ -29,21 +66,45 @@ class MultiPlatformJobScraper:
     """
 
     KNOWN_CITIES = {
-        'hyderabad', 'secunderabad', 'bengaluru', 'bangalore', 'pune', 
-        'mumbai', 'delhi', 'gurugram', 'gurgaon', 'noida', 'chennai', 
+        'hyderabad', 'secunderabad', 'bengaluru', 'bangalore', 'pune',
+        'mumbai', 'delhi', 'gurugram', 'gurgaon', 'noida', 'chennai',
         'kolkata', 'ahmedabad', 'india', 'remote', 'hybrid'
     }
 
     ROLE_KEYWORDS = {
-        'data', 'analyst', 'annotator', 'sql', 'developer', 'power', 
-        'bi', 'fresher', 'junior', 'sr', 'senior', 'lead', 'intern', 
+        'data', 'analyst', 'annotator', 'sql', 'developer', 'power',
+        'bi', 'fresher', 'junior', 'sr', 'senior', 'lead', 'intern',
         'engineer', 'specialist', 'associate', 'trainee', 'consultant'
     }
+
+    # Pre-compiled experience ceiling patterns
+    _MIXED_MO_TO_YR_RE = re.compile(
+        r'\b(\d+(?:\.\d+)?)\+?\s*(?:months?|mos?)\s*(?:[-–—]|to)\s*(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?|yoe)\b'
+    )
+    _MIXED_YR_TO_MO_RE = re.compile(
+        r'\b(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?|yoe)\s*(?:[-–—]|to)\s*(\d+(?:\.\d+)?)\+?\s*(?:months?|mos?)\b'
+    )
+    _YR_RANGE_RE = re.compile(
+        r'\b(\d+(?:\.\d+)?)\+?\s*(?:[-–—]|to)\s*(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?|yoe)\b'
+    )
+    _YR_SINGLE_RE = re.compile(
+        r'\b(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?|yoe)\b'
+    )
+    _MO_RANGE_RE = re.compile(
+        r'\b(\d+(?:\.\d+)?)\+?\s*(?:[-–—]|to)\s*(\d+(?:\.\d+)?)\+?\s*(?:months?|mos?)\b'
+    )
+    _MO_SINGLE_RE = re.compile(
+        r'\b(\d+(?:\.\d+)?)\+?\s*(?:months?|mos?)\b'
+    )
+    _FRESHER_WORD_RE = re.compile(
+        r'\b(?:fresher|freshers|intern|internship|entry[\s-]*level|trainee|new\s+grad|fresh\s+graduate)\b'
+    )
 
     def __init__(self, config: Dict[str, Any], active_mode: str = "balanced"):
         self.config = config.get("search", {})
         self.firecrawl_config = config.get("firecrawl", {})
         self.modes_config = config.get("modes", {})
+        self.output_config = config.get("output", {})
         self.target_skills = config.get("skills_filter", {}).get("target_skills", [])
         self.extractor = JobRequirementExtractor(self.target_skills)
         self.firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY", "").strip()
@@ -61,6 +122,7 @@ class MultiPlatformJobScraper:
             "fc_candidates": 0,
             "fc_markdown_hits": 0,
             "fc_retained": 0,
+            "jobspy_candidates": 0,
             "jobspy_retained": 0,
             "dropped_stale_naukri": 0,
             "dropped_future_naukri": 0,
@@ -69,18 +131,18 @@ class MultiPlatformJobScraper:
             "dropped_experience_ceiling": 0,
         }
 
-        # Persistent seen jobs ledger
-        self.seen_jobs_file = "seen_jobs.json"
-        self.seen_jobs = self._load_seen_jobs()
+        # Persistent seen jobs ledger (45-day retention to exceed 30-day Naukri window)
+        self.seen_jobs_file = self.output_config.get("seen_jobs_file", "seen_jobs.json")
+        self.seen_jobs = self._load_seen_jobs(max_days=45)
 
-    def _load_seen_jobs(self, max_days: int = 14) -> Dict[str, str]:
+    def _load_seen_jobs(self, max_days: int = 45) -> Dict[str, str]:
         """Loads previously seen job URLs and prunes entries older than max_days."""
         if not os.path.exists(self.seen_jobs_file):
             return {}
         try:
             with open(self.seen_jobs_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            
+
             if not isinstance(data, dict):
                 return {}
 
@@ -114,7 +176,7 @@ class MultiPlatformJobScraper:
         """
         if not self.firecrawl_api_key:
             return None
-        
+
         headers = {"Authorization": f"Bearer {self.firecrawl_api_key}"}
         endpoints = [
             "https://api.firecrawl.dev/v2/team/credit-usage",
@@ -146,7 +208,7 @@ class MultiPlatformJobScraper:
         results_wanted = self.config.get("results_wanted_per_role", 20)
         hours_old = self.config.get("hours_old", 72)
         country_indeed = self.config.get("indeed_country", "india")
-        
+
         firecrawl_enabled = self.firecrawl_config.get("enabled", True)
         use_firecrawl = firecrawl_enabled and bool(self.firecrawl_api_key)
 
@@ -158,6 +220,7 @@ class MultiPlatformJobScraper:
         self.last_run_stats["fc_candidates"] = 0
         self.last_run_stats["fc_markdown_hits"] = 0
         self.last_run_stats["fc_retained"] = 0
+        self.last_run_stats["jobspy_candidates"] = 0
         self.last_run_stats["jobspy_retained"] = 0
         self.last_run_stats["dropped_stale_naukri"] = 0
         self.last_run_stats["dropped_future_naukri"] = 0
@@ -199,6 +262,7 @@ class MultiPlatformJobScraper:
                 )
 
                 if jobs_df is not None and not jobs_df.empty:
+                    self.last_run_stats["jobspy_candidates"] += len(jobs_df)
                     valid_mask = jobs_df.apply(self._row_has_valid_direct_url, axis=1)
                     clean_df = jobs_df[valid_mask].copy()
                     if not clean_df.empty:
@@ -221,8 +285,8 @@ class MultiPlatformJobScraper:
             return pd.DataFrame()
 
         combined_df = pd.concat(all_results, ignore_index=True)
-        
-        # Deduplicate based on company name, title, and location
+
+        # Deduplicate based on canonical URL and company/title/location
         print(f"\n[*] Total raw direct jobs collected: {len(combined_df)}")
         deduped_df = self._deduplicate_jobs(combined_df)
         print(f"[*] Total unique verified jobs after deduplication: {len(deduped_df)}")
@@ -251,9 +315,9 @@ class MultiPlatformJobScraper:
             "Authorization": f"Bearer {self.firecrawl_api_key}",
             "Content-Type": "application/json"
         }
-        
+
         query = f'"{title}" "{location}" site:naukri.com/job-listings'
-        
+
         payload: Dict[str, Any] = {
             "query": query,
             "limit": limit,
@@ -271,7 +335,7 @@ class MultiPlatformJobScraper:
                 json=payload,
                 timeout=self.timeout
             )
-            
+
             if res.status_code == 402:
                 print("   [!] Firecrawl credits depleted (HTTP 402 Payment Required). Continuing with local JobSpy.")
                 return pd.DataFrame()
@@ -282,7 +346,7 @@ class MultiPlatformJobScraper:
 
             raw_data = res.json().get("data", {})
             items = raw_data.get("web", []) if isinstance(raw_data, dict) else (raw_data if isinstance(raw_data, list) else [])
-            
+
             self.last_run_stats["fc_candidates"] += len(items)
             self.last_run_stats["fc_markdown_hits"] += sum(
                 1 for item in items if (item.get("markdown") or "").strip()
@@ -296,7 +360,7 @@ class MultiPlatformJobScraper:
                 url = item.get("url", "")
                 title_raw = item.get("title", "")
                 desc = item.get("description", "")
-                
+
                 if not self._is_direct_job_url(url):
                     continue
 
@@ -304,7 +368,7 @@ class MultiPlatformJobScraper:
                     site = "Naukri"
                 elif "linkedin.com" in url:
                     site = "LinkedIn"
-                elif "indeed.com" in url:
+                elif "indeed.com" in url or "indeed.co.in" in url:
                     site = "Indeed"
                 else:
                     site = "Direct Careers"
@@ -364,8 +428,8 @@ class MultiPlatformJobScraper:
     KNOWN_ATS_JOB_PATTERNS = {
         "greenhouse.io": r'/[a-zA-Z0-9_-]+/jobs/\d+',
         "lever.co": r'/[a-zA-Z0-9_-]+/[0-9a-fA-F-]{8,}(?:/apply)?',
-        "myworkdayjobs.com": r'(?:/[a-zA-Z0-9_.-]+){1,3}/job/(?:[^/]+/)?(?:[a-zA-Z0-9_.-]+_)?[a-zA-Z0-9_-]+',
-        "myworkdaysite.com": r'(?:/[a-zA-Z0-9_.-]+){1,3}/job/(?:[^/]+/)?(?:[a-zA-Z0-9_.-]+_)?[a-zA-Z0-9_-]+',
+        "myworkdayjobs.com": r'(?:/[a-zA-Z0-9_.-]+){1,3}/job/(?:[^/]+/)?[a-zA-Z0-9_.-]*[a-zA-Z0-9_-]',
+        "myworkdaysite.com": r'(?:/[a-zA-Z0-9_.-]+){1,3}/job/(?:[^/]+/)?[a-zA-Z0-9_.-]*[a-zA-Z0-9_-]',
         "smartrecruiters.com": r'/[a-zA-Z0-9_-]+/\d{8,}(?:-[a-zA-Z0-9_-]+)?',
         "ashbyhq.com": r'/[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]{8,}(?:/application)?',
         "taleo.net": r'/careersection/[^/]+/jobdetail\.ftl',
@@ -396,7 +460,7 @@ class MultiPlatformJobScraper:
         u_direct = self._clean_http_url(r.get("job_url_direct"))
         u_job = self._clean_http_url(r.get("job_url"))
         return bool(
-            (u_direct and self._is_direct_job_url(u_direct)) or 
+            (u_direct and self._is_direct_job_url(u_direct)) or
             (u_job and self._is_direct_job_url(u_job))
         )
 
@@ -420,8 +484,8 @@ class MultiPlatformJobScraper:
         u_lower = clean_url.lower()
 
         disallowed_patterns = [
-            "-jobs-in-", "-vacancies-in-", "/jobs-in-", "job-vacancies", 
-            "/jobs/search", "/jobs/collections", "/jobs?q=", "/cmp/", 
+            "-jobs-in-", "-vacancies-in-", "/jobs-in-", "job-vacancies",
+            "/jobs/search", "/jobs/collections", "/jobs?q=", "/cmp/",
             "tcs-power-bi-jobs", "analyst-jobs", "developer-jobs",
             "/jobs-search", "/jobs?search="
         ]
@@ -436,8 +500,8 @@ class MultiPlatformJobScraper:
         if self._matches_host(host, "linkedin.com"):
             return bool(re.fullmatch(r'/jobs/view/(?:[a-zA-Z0-9_-]+-)?\d+', path))
 
-        # 3. Indeed Direct Job (validates full hex token on viewjob path or direct hash slug)
-        if self._matches_host(host, "indeed.com"):
+        # 3. Indeed Direct Job (validates full hex token on viewjob path or direct hash slug; supports .com and .co.in)
+        if self._matches_host(host, "indeed.com") or self._matches_host(host, "indeed.co.in"):
             jk_vals = query_params.get("jk", [])
             has_valid_jk = bool(jk_vals and re.fullmatch(r'[a-f0-9]{16}', jk_vals[0], re.I))
             is_viewjob_path = bool(re.fullmatch(r'/(?:m/)?viewjob|/rc/clk', path))
@@ -526,21 +590,21 @@ class MultiPlatformJobScraper:
                 slug = m.group(1).lower()
                 slug = re.sub(r'-\d+-to-\d+-years?', '', slug)
                 tokens = slug.split('-')
-                
+
                 start_idx = 0
                 while start_idx < len(tokens) and tokens[start_idx] in self.ROLE_KEYWORDS:
                     start_idx += 1
-                
+
                 end_idx = len(tokens)
                 while end_idx > start_idx and (tokens[end_idx-1] in self.KNOWN_CITIES or tokens[end_idx-1] in ['hiring', 'opening', 'job', 'jobs']):
                     end_idx -= 1
-                
+
                 company_tokens = tokens[start_idx:end_idx]
                 deduped_tokens = []
                 for t in company_tokens:
                     if t not in deduped_tokens and t != 'hiring':
                         deduped_tokens.append(t)
-                        
+
                 if deduped_tokens:
                     candidate_co = ' '.join(deduped_tokens).title()
                     if candidate_co.lower() not in self.KNOWN_CITIES:
@@ -630,46 +694,51 @@ class MultiPlatformJobScraper:
 
     def _within_ceiling(self, exp_str: str, max_years: int = 2) -> bool:
         """
-        Finding 1 Fix: Gates rows against max experience ceiling.
-        Returns False if minimum required experience > max_years.
-        Leniently returns True for unparsable or fresher rows.
+        Gates rows against max experience ceiling.
+        Evaluates numeric experience ranges and standalone values first (using range-blanking
+        so upper bounds of valid ranges are never mistaken for standalone minimums),
+        then checks word-bounded fresher/entry-level tokens.
         """
         if not exp_str or exp_str in ["Not Specified", "General Requirements"]:
             return True
 
-        exp_lower = exp_str.lower()
-        if any(k in exp_lower for k in ["fresher", "intern", "entry", "trainee", "new grad", "graduate"]):
+        remaining = exp_str.lower()
+        min_years_found: List[float] = []
+
+        # 1. Mixed unit ranges: "6 months to 1 year" or "1 year to 36 months"
+        for m in self._MIXED_MO_TO_YR_RE.finditer(remaining):
+            min_years_found.append(float(m.group(1)) / 12.0)
+        remaining = self._MIXED_MO_TO_YR_RE.sub(" ", remaining)
+
+        for m in self._MIXED_YR_TO_MO_RE.finditer(remaining):
+            min_years_found.append(float(m.group(1)))
+        remaining = self._MIXED_YR_TO_MO_RE.sub(" ", remaining)
+
+        # 2. Year ranges: "0 - 2 Years", "5-8 years", "1+ to 4 years", "3–5 YOE"
+        for m in self._YR_RANGE_RE.finditer(remaining):
+            min_years_found.append(float(m.group(1)))
+        remaining = self._YR_RANGE_RE.sub(" ", remaining)
+
+        # 3. Standalone / Plus Years: "5+ years", "2 yrs", "4 YOE"
+        for m in self._YR_SINGLE_RE.finditer(remaining):
+            min_years_found.append(float(m.group(1)))
+        remaining = self._YR_SINGLE_RE.sub(" ", remaining)
+
+        # 4. Month ranges & Standalone Months (only when no year requirement was found)
+        if not min_years_found:
+            for m in self._MO_RANGE_RE.finditer(remaining):
+                min_years_found.append(float(m.group(1)) / 12.0)
+            remaining = self._MO_RANGE_RE.sub(" ", remaining)
+
+            for m in self._MO_SINGLE_RE.finditer(remaining):
+                min_years_found.append(float(m.group(1)) / 12.0)
+
+        if min_years_found:
+            return max(min_years_found) <= max_years
+
+        # 5. Word-bounded fresher/intern check when no numeric requirement is present
+        if self._FRESHER_WORD_RE.search(exp_str.lower()):
             return True
-
-        # 1. Forward Mixed Unit Range: "6 months to 1 year" -> min = 6/12 = 0.5 yrs
-        m_mixed = re.search(r'(\d+(?:\.\d+)?)\s*(?:months?|mos?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?)', exp_lower)
-        if m_mixed:
-            return (float(m_mixed.group(1)) / 12.0) <= max_years
-
-        # 2. Reverse Mixed Unit Range: "1 year to 36 months" -> min = 1.0 yrs
-        m_rev_mixed = re.search(r'(\d+(?:\.\d+)?)\s*(?:years?|yrs?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(?:months?|mos?)', exp_lower)
-        if m_rev_mixed:
-            return float(m_rev_mixed.group(1)) <= max_years
-
-        # 3. Month Range: "3 - 6 months" -> min = 3/12 = 0.25 yrs
-        m_mrange = re.search(r'(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(?:months?|mos?)', exp_lower)
-        if m_mrange:
-            return (float(m_mrange.group(1)) / 12.0) <= max_years
-
-        # 4. Single / Plus Months: "6 months", "6+ mos" -> min = 6/12 = 0.5 yrs
-        m_msingle = re.search(r'(\d+(?:\.\d+)?)\+?\s*(?:months?|mos?)', exp_lower)
-        if m_msingle:
-            return (float(m_msingle.group(1)) / 12.0) <= max_years
-
-        # 5. Year Range: "0.5 - 2 Years", "2 to 4 years"
-        m_range = re.search(r'(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?)', exp_lower)
-        if m_range:
-            return float(m_range.group(1)) <= max_years
-
-        # 6. Single / Plus Years: "1.5+ Years", "5+ yrs"
-        m_plus = re.search(r'(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?)', exp_lower)
-        if m_plus:
-            return float(m_plus.group(1)) <= max_years
 
         return True
 
@@ -679,22 +748,71 @@ class MultiPlatformJobScraper:
     )
 
     def _is_senior_title(self, title: str, url: str = "") -> bool:
-        """Detects senior, lead, or management postings in title or URL slug."""
-        text = f"{title} {url}".replace("-", " ").replace("_", " ").lower()
+        """
+        Detects senior, lead, or management postings in the job title or URL path slug.
+        Excludes URL hostname and query parameters to prevent false positives (e.g. ?utm_source=lead_form).
+        """
+        url_path = ""
+        if url and isinstance(url, str):
+            try:
+                url_path = urlsplit(url.strip()).path
+            except Exception:
+                url_path = url
+        text = f"{title or ''} {url_path}".replace("-", " ").replace("_", " ").replace("/", " ").lower()
         return bool(self.SENIOR_TITLE_PATTERN.search(text))
 
+    def _resolve_row_canonical_url(self, row: Any) -> str:
+        """Resolves and canonicalizes the best direct URL for a DataFrame row."""
+        u_direct = self._clean_http_url(row.get("job_url_direct"))
+        u_job = self._clean_http_url(row.get("job_url"))
+        if u_direct and self._is_direct_job_url(u_direct):
+            raw_url = u_direct
+        elif u_job and self._is_direct_job_url(u_job):
+            raw_url = u_job
+        else:
+            raw_url = u_direct or u_job or ""
+        return canonicalize_job_url(raw_url) if raw_url else ""
+
     def _deduplicate_jobs(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Remove duplicate postings while preserving distinct openings."""
+        """
+        Removes duplicate postings using two-stage deduplication:
+        1. Exact canonical URL match (preserving distinct ?jk= / ATS query IDs while collapsing UTM variants)
+        2. Fallback (clean_company, clean_title, clean_location) match for cross-board duplicates
+           that do not have distinct canonical URLs on the same host.
+        """
         if df.empty:
             return df
 
-        df['clean_company'] = df['company'].fillna('').astype(str).str.strip().str.lower()
-        df['clean_title'] = df['title'].fillna('').astype(str).str.strip().str.lower()
-        df['clean_location'] = df['location'].fillna('').astype(str).str.strip().str.lower()
-        
-        deduped = df.drop_duplicates(subset=['clean_company', 'clean_title', 'clean_location'], keep='first').copy()
-        deduped.drop(columns=['clean_company', 'clean_title', 'clean_location'], inplace=True)
-        return deduped
+        work_df = df.copy()
+        work_df["_canon_url"] = work_df.apply(self._resolve_row_canonical_url, axis=1)
+
+        # Stage 1: Deduplicate rows sharing the exact same non-empty canonical URL
+        has_url_mask = work_df["_canon_url"] != ""
+        if has_url_mask.any():
+            url_dups = work_df[has_url_mask].duplicated(subset=["_canon_url"], keep="first")
+            drop_indices = url_dups[url_dups].index
+            work_df.drop(index=drop_indices, inplace=True)
+
+        # Stage 2: Deduplicate on (company, title, location), keeping distinct canonical URLs if both are valid
+        work_df["clean_company"] = work_df["company"].fillna("").astype(str).str.strip().str.lower()
+        work_df["clean_title"] = work_df["title"].fillna("").astype(str).str.strip().str.lower()
+        work_df["clean_location"] = work_df["location"].fillna("").astype(str).str.strip().str.lower()
+
+        work_df = work_df.drop_duplicates(
+            subset=["clean_company", "clean_title", "clean_location", "_canon_url"],
+            keep="first"
+        ).copy()
+
+        # Also deduplicate rows where _canon_url was empty and (company, title, location) matched
+        empty_url_mask = work_df["_canon_url"] == ""
+        if empty_url_mask.any():
+            work_df = work_df.drop_duplicates(
+                subset=["clean_company", "clean_title", "clean_location"],
+                keep="first"
+            ).copy()
+
+        work_df.drop(columns=["clean_company", "clean_title", "clean_location", "_canon_url"], inplace=True)
+        return work_df
 
     def _enrich_jobs(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -703,7 +821,7 @@ class MultiPlatformJobScraper:
         - Senior title & slug heuristic gate (<= 2 YOE ceiling)
         - Naukri URL slug ground-truth experience override
         - Post-fetch experience ceiling gate (<= max_experience_years)
-        - Cross-run freshness tracker (🟢 NEW vs ⚪ SEEN)
+        - Cross-run freshness tracker (🟢 NEW vs ⚪ SEEN) via canonicalize_job_url()
         """
         enriched_rows = []
         today = datetime.now().date()
@@ -712,7 +830,7 @@ class MultiPlatformJobScraper:
         for _, row in df.iterrows():
             job_dict = row.to_dict()
             extracted_info = self.extractor.process_job(job_dict)
-            
+
             u_direct = self._clean_http_url(row.get("job_url_direct"))
             u_job = self._clean_http_url(row.get("job_url"))
             if u_direct and self._is_direct_job_url(u_direct):
@@ -734,7 +852,7 @@ class MultiPlatformJobScraper:
                         self.last_run_stats["dropped_future_naukri"] += 1
                         continue
                     age_days = (today - post_date).days
-                    if age_days > 30:
+                    if age_days > 14:
                         self.last_run_stats["dropped_stale_naukri"] += 1
                         continue
                     date_status = "parsed"
@@ -756,9 +874,9 @@ class MultiPlatformJobScraper:
                 self.last_run_stats["dropped_experience_ceiling"] += 1
                 continue
 
-            # Feature 2: Cross-run freshness tagging
-            norm_url = re.sub(r'\?.*$', '', final_url_str).strip().lower()
-            if norm_url in self.seen_jobs:
+            # Feature 2: Cross-run freshness tagging using canonical URL
+            norm_url = canonicalize_job_url(final_url_str)
+            if norm_url and norm_url in self.seen_jobs:
                 lead_status = "⚪ SEEN"
             else:
                 lead_status = "🟢 NEW"

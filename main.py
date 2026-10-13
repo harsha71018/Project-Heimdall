@@ -233,6 +233,7 @@ def main():
     fc_candidates = stats.get("fc_candidates", 0)
     fc_markdown_hits = stats.get("fc_markdown_hits", 0)
     fc_retained = stats.get("fc_retained", 0)
+    jobspy_candidates = stats.get("jobspy_candidates", 0)
     jobspy_retained = stats.get("jobspy_retained", 0)
     dropped_stale_naukri = stats.get("dropped_stale_naukri", 0)
     dropped_future_naukri = stats.get("dropped_future_naukri", 0)
@@ -249,6 +250,7 @@ def main():
         "fc_candidates": fc_candidates,
         "fc_markdown_hits": fc_markdown_hits,
         "fc_retained": fc_retained,
+        "jobspy_candidates": jobspy_candidates,
         "jobspy_retained": jobspy_retained,
         "total_unique_jobs": total_unique,
         "dropped_stale_naukri": dropped_stale_naukri,
@@ -261,27 +263,29 @@ def main():
     log_updated = migrate_and_append_run_log(log_file, row_data)
     log_status_str = format_run_log_status(log_updated, log_file)
 
+    # Instantiate generator early so applications.json syncs even on 0-job runs
+    output_filename = args.output if args.output else None
+    dashboard_gen = ExcelDashboardGenerator(config)
+
     if enriched_jobs_df.empty:
         print("\n" + "=" * 70)
         print("[!] No jobs were returned. Check your internet connection or search parameters.")
         print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
         print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")
-        print(f"    - JobSpy (LinkedIn / Indeed)    : {jobspy_retained} roles")
+        print(f"    - JobSpy (LinkedIn / Indeed)    : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
         print(f"[+] Firecrawl Credit Audit              : {credit_audit_str}")
         print(log_status_str)
         print("=" * 70)
         sys.exit(0)
 
     # 2. Build Formatted Excel Tracker
-    output_filename = args.output if args.output else None
-    dashboard_gen = ExcelDashboardGenerator(config)
     generated_file = dashboard_gen.generate(enriched_jobs_df, output_path=output_filename, run_stats=row_data)
 
     # 3. Print Summary Box
     print("\n" + "=" * 70)
     print(f"[+] SUCCESS! Total Active Opportunities Aggregated: {total_unique}")
     print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")
-    print(f"    - JobSpy (LinkedIn / Indeed)    : {jobspy_retained} roles")
+    print(f"    - JobSpy (LinkedIn / Indeed)    : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
     print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
     print(f"[+] Firecrawl Credit Audit              : {credit_audit_str}")
     print(f"[+] Output File                         : {os.path.abspath(generated_file)}")

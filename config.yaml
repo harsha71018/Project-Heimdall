@@ -18,8 +18,8 @@ search:
   experience_filter: "0-2 years"
   max_experience_years: 2      # Strict ceiling: discard jobs requiring > 2 years minimum
   
-  # Max age of job postings in hours (72h for fresh listings)
-  hours_old: 72
+  # Max age of job postings in hours (24h for fresh daily listings)
+  hours_old: 24
   
   # Target number of jobs to fetch per title via JobSpy (kept at 12 to prevent LinkedIn 429 rate limits)
   results_wanted_per_role: 12

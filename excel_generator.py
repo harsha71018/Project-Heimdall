@@ -2,8 +2,10 @@ import os
 import re
 import json
 import glob
+import tempfile
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -11,20 +13,56 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils import get_column_letter
 import pandas as pd
 
+# Query parameters that uniquely identify a job posting on aggregator/ATS platforms
+IDENTITY_QUERY_PARAMS = {
+    "jk", "jl", "id", "jobreferencecode", "jobid", "page", "job"
+}
+
+
+def canonicalize_job_url(url: str) -> str:
+    """
+    Normalizes a job URL for ledger and deduplication lookups while preserving
+    platform-required identity query parameters (e.g., Indeed ?jk=, Glassdoor ?jl=, ATS IDs).
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    raw = url.strip()
+    if not raw.lower().startswith(("http://", "https://")):
+        return ""
+    try:
+        parsed = urlsplit(raw)
+        if not parsed.scheme or not parsed.hostname:
+            return ""
+        kept_params = [
+            (k.lower(), v.strip().lower())
+            for k, v in parse_qsl(parsed.query, keep_blank_values=False)
+            if k.lower() in IDENTITY_QUERY_PARAMS
+        ]
+        kept_params.sort()
+        clean_path = parsed.path.rstrip("/").lower()
+        return urlunsplit((
+            parsed.scheme.lower(),
+            parsed.hostname.lower(),
+            clean_path,
+            urlencode(kept_params),
+            ""
+        ))
+    except Exception:
+        return re.sub(r'\?.*$', '', raw).strip().lower()
+
 
 class ExcelDashboardGenerator:
     """
     Builds a styled, interactive Excel Workbook for job application tracking.
     Features:
     - Native openpyxl hyperlinks (handles long UTM tracking URLs safely)
-    - Persistent Application Status & Notes memory via applications.json
-    - Automatic sync from the single most recent tracker file (newest-wins precedence)
-    - Graceful fallback on PermissionError if yesterday's file is open in Excel
+    - Persistent Application Status & Notes memory via applications.json (atomic writes)
+    - Multi-file mtime-ordered sync across leads/ and Tracker_Latest.xlsx (newest-wins)
+    - Supports reverting status back to 'Not Applied'
+    - Graceful fallback on PermissionError if a workbook is open in Excel
     - Dual-output generation: timestamped archive in leads/ and stable Tracker_Latest.xlsx
     - Tab 2 Run Summary audit dashboard
-    - Dropdown Data Validation for Application Status
-    - Clean professional theme with freeze panes & auto-filters
-    - Graceful fallback if file is currently open in Excel
+    - Formula injection sanitization for untrusted strings
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -32,7 +70,7 @@ class ExcelDashboardGenerator:
         self.filename = self.output_config.get("filename", "Job_Applications_Tracker.xlsx")
         self.sheet_name = self.output_config.get("sheet_name", "Active Job Leads")
         self.status_options = self.output_config.get("status_options", [
-            "Not Applied", "Applied", "Referral Requested", 
+            "Not Applied", "Applied", "Referral Requested",
             "Screening Call", "Interviewing", "Assessment", "Rejected", "Offer Received"
         ])
         self.leads_dir = self.output_config.get("leads_dir", "leads")
@@ -40,17 +78,93 @@ class ExcelDashboardGenerator:
         self.applications_file = self.output_config.get("applications_file", "applications.json")
         self.applications_ledger = self._sync_and_load_applications()
 
+    @staticmethod
+    def _sanitize_cell_value(val: Any) -> str:
+        """Neutralizes spreadsheet formula injection on untrusted strings."""
+        if val is None:
+            return ""
+        s = str(val)
+        if s and s != "-" and s[0] in ("=", "+", "-", "@"):
+            return f"'{s}"
+        return s
+
+    @staticmethod
+    def _unescape_cell_value(val: Any) -> str:
+        """Strips leading formula-escape single quote when syncing back from Excel."""
+        if val is None:
+            return ""
+        s = str(val).strip()
+        if len(s) > 1 and s[0] == "'" and s[1] in ("=", "+", "-", "@"):
+            return s[1:].strip()
+        return s
+
+    def _atomic_save_applications(self, ledger: Dict[str, Dict[str, str]]) -> None:
+        """Atomically writes applications.json using a temp file and os.replace."""
+        abs_target = os.path.abspath(self.applications_file)
+        parent_dir = os.path.dirname(abs_target)
+        os.makedirs(parent_dir, exist_ok=True)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=parent_dir, delete=False, encoding="utf-8", suffix=".tmp"
+            ) as tmp_f:
+                tmp_path = tmp_f.name
+                json.dump(ledger, tmp_f, indent=2)
+                tmp_f.flush()
+                os.fsync(tmp_f.fileno())
+            os.replace(tmp_path, abs_target)
+        except Exception as e:
+            print(f"[!] Warning: Could not save '{self.applications_file}': {e}")
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    def _get_ordered_sync_candidates(self) -> List[str]:
+        """
+        Gathers candidate tracker workbooks from leads/, stable_filename, and filename.
+        Returns existing files sorted from oldest to newest by (mtime, basename)
+        so that the most recently modified file always has final precedence.
+        """
+        candidates = []
+        seen_abs = set()
+
+        if os.path.isdir(self.leads_dir):
+            pattern = os.path.join(self.leads_dir, "Job_Leads_*.xlsx")
+            for p in glob.glob(pattern):
+                abs_p = os.path.abspath(p)
+                if os.path.exists(abs_p) and abs_p not in seen_abs:
+                    seen_abs.add(abs_p)
+                    candidates.append(p)
+
+        for fallback in [self.stable_filename, self.filename]:
+            if fallback and os.path.exists(fallback):
+                abs_p = os.path.abspath(fallback)
+                if abs_p not in seen_abs:
+                    seen_abs.add(abs_p)
+                    candidates.append(fallback)
+
+        def _sort_key(path: str):
+            try:
+                mtime = round(os.path.getmtime(path), 3)
+            except OSError:
+                mtime = 0.0
+            return (mtime, os.path.basename(path))
+
+        candidates.sort(key=_sort_key)
+        return candidates
+
     def _sync_and_load_applications(self) -> Dict[str, Dict[str, str]]:
         """
-        Loads existing applications.json memory as source of truth.
-        Syncs newly recorded statuses/notes from the single newest previous workbook.
-        Precedence:
-          1. Newest timestamped file in leads/ (Job_Leads_*.xlsx)
-          2. Fallback to stable_filename or legacy filename
-        Safely catches PermissionError if a file is currently open in Excel.
-        Matches by header names ('Application Status', 'Referral / Notes', 'Apply Action').
+        Loads existing applications.json memory as baseline source of truth, then
+        syncs newly recorded statuses/notes across historical workbooks ordered by
+        modification time (oldest -> newest, so newest edits always win).
+        Supports reverting a previously tracked job back to 'Not Applied'.
+        Safely catches PermissionError if any workbook is currently open in Excel.
         """
-        ledger = {}
+        ledger: Dict[str, Dict[str, str]] = {}
         if os.path.exists(self.applications_file):
             try:
                 with open(self.applications_file, "r", encoding="utf-8") as f:
@@ -60,28 +174,14 @@ class ExcelDashboardGenerator:
             except Exception as e:
                 print(f"[!] Warning: Could not read '{self.applications_file}': {e}")
 
-        # Locate single newest historical file
-        latest_file: Optional[str] = None
-        if os.path.isdir(self.leads_dir):
-            pattern = os.path.join(self.leads_dir, "Job_Leads_*.xlsx")
-            lead_files = glob.glob(pattern)
-            if lead_files:
-                lead_files.sort(reverse=True)
-                latest_file = lead_files[0]
+        candidate_files = self._get_ordered_sync_candidates()
+        total_updates = 0
 
-        if not latest_file:
-            for candidate in [self.stable_filename, self.filename]:
-                if candidate and os.path.exists(candidate):
-                    latest_file = candidate
-                    break
-
-        if latest_file and os.path.exists(latest_file):
+        for target_file in candidate_files:
+            wb = None
             try:
-                wb = openpyxl.load_workbook(latest_file, data_only=True)
-                if self.sheet_name in wb.sheetnames:
-                    ws = wb[self.sheet_name]
-                else:
-                    ws = wb.active
+                wb = openpyxl.load_workbook(target_file, data_only=True)
+                ws = wb[self.sheet_name] if self.sheet_name in wb.sheetnames else wb.active
 
                 headers = [str(cell.value or "").strip() for cell in ws[1]]
                 header_indices = {}
@@ -104,50 +204,79 @@ class ExcelDashboardGenerator:
                 company_col = header_indices.get("company")
                 title_col = header_indices.get("title")
 
-                if status_col or notes_col:
-                    updates_count = 0
-                    for row in range(2, ws.max_row + 1):
-                        status_val = str(ws.cell(row=row, column=status_col).value or "").strip() if status_col else ""
-                        notes_val = str(ws.cell(row=row, column=notes_col).value or "").strip() if notes_col else ""
+                if not (status_col or notes_col):
+                    continue
 
-                        if (status_val in ["", "Not Applied", "None"]) and not notes_val:
-                            continue
+                for row in range(2, ws.max_row + 1):
+                    raw_status = ws.cell(row=row, column=status_col).value if status_col else ""
+                    raw_notes = ws.cell(row=row, column=notes_col).value if notes_col else ""
 
-                        apply_cell = ws.cell(row=row, column=apply_col) if apply_col else None
-                        url_target = ""
-                        if apply_cell:
-                            if apply_cell.hyperlink and apply_cell.hyperlink.target:
-                                url_target = apply_cell.hyperlink.target
-                            elif apply_cell.value and str(apply_cell.value).startswith("http"):
-                                url_target = str(apply_cell.value).strip()
+                    status_val = self._unescape_cell_value(raw_status)
+                    notes_val = self._unescape_cell_value(raw_notes)
 
-                        norm_url = re.sub(r'\?.*$', '', url_target).strip().lower() if url_target else ""
-                        company_val = str(ws.cell(row=row, column=company_col).value or "").strip().lower() if company_col else ""
-                        title_val = str(ws.cell(row=row, column=title_col).value or "").strip().lower() if title_col else ""
+                    apply_cell = ws.cell(row=row, column=apply_col) if apply_col else None
+                    url_target = ""
+                    if apply_cell:
+                        if apply_cell.hyperlink and apply_cell.hyperlink.target:
+                            url_target = str(apply_cell.hyperlink.target).strip()
+                        elif apply_cell.value and str(apply_cell.value).strip().startswith("http"):
+                            url_target = str(apply_cell.value).strip()
 
-                        key = norm_url if norm_url.startswith("http") else (f"{company_val}::{title_val}" if company_val and title_val else "")
-                        if key:
-                            ledger[key] = {
-                                "status": status_val if status_val and status_val != "None" else "Not Applied",
-                                "notes": notes_val,
-                                "last_updated": datetime.now().strftime("%Y-%m-%d")
-                            }
-                            updates_count += 1
+                    norm_url = canonicalize_job_url(url_target) if url_target else ""
+                    company_val = self._unescape_cell_value(
+                        ws.cell(row=row, column=company_col).value if company_col else ""
+                    ).lower()
+                    title_val = self._unescape_cell_value(
+                        ws.cell(row=row, column=title_col).value if title_col else ""
+                    ).lower()
 
-                    if updates_count > 0:
-                        try:
-                            parent_dir = os.path.dirname(os.path.abspath(self.applications_file))
-                            os.makedirs(parent_dir, exist_ok=True)
-                            with open(self.applications_file, "w", encoding="utf-8") as f:
-                                json.dump(ledger, f, indent=2)
-                        except Exception as e:
-                            print(f"[!] Warning: Could not save '{self.applications_file}': {e}")
+                    if norm_url:
+                        key = norm_url
+                    elif company_val and title_val and company_val != "no jobs found":
+                        key = f"{company_val}::{title_val}"
+                    else:
+                        key = ""
+
+                    if not key:
+                        continue
+
+                    is_default_empty = (status_val in ["", "Not Applied", "None"]) and not notes_val
+                    if is_default_empty:
+                        # Support reverting a previously tracked application back to 'Not Applied'
+                        if key in ledger:
+                            prev_status = ledger[key].get("status", "Not Applied")
+                            prev_notes = ledger[key].get("notes", "")
+                            if prev_status != "Not Applied" or prev_notes != "":
+                                ledger[key] = {
+                                    "status": "Not Applied",
+                                    "notes": "",
+                                    "last_updated": datetime.now().strftime("%Y-%m-%d")
+                                }
+                                total_updates += 1
+                        continue
+
+                    clean_status = status_val if status_val and status_val != "None" else "Not Applied"
+                    ledger[key] = {
+                        "status": clean_status,
+                        "notes": notes_val,
+                        "last_updated": datetime.now().strftime("%Y-%m-%d")
+                    }
+                    total_updates += 1
 
             except PermissionError:
-                print(f"[!] Warning: Tracker file '{latest_file}' is currently locked in Excel.")
+                print(f"[!] Warning: Tracker file '{target_file}' is currently locked in Excel.")
                 print(f"    Proceeding safely with existing '{self.applications_file}' memory.")
             except Exception as e:
-                print(f"[!] Warning: Could not sync from '{latest_file}': {e}")
+                print(f"[!] Warning: Could not sync from '{target_file}': {e}")
+            finally:
+                if wb is not None:
+                    try:
+                        wb.close()
+                    except Exception:
+                        pass
+
+        if total_updates > 0:
+            self._atomic_save_applications(ledger)
 
         return ledger
 
@@ -169,242 +298,270 @@ class ExcelDashboardGenerator:
             save_stable = True
 
         wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = self.sheet_name
-        ws.views.sheetView[0].showGridLines = True
+        try:
+            ws = wb.active
+            ws.title = self.sheet_name
+            ws.views.sheetView[0].showGridLines = True
 
-        # Define Columns for Tab 1
-        headers = [
-            "Sl. No",
-            "Lead Status",
-            "Date Posted",
-            "Company Name",
-            "Job Title / Role",
-            "Main Skills Required",
-            "Experience Level",
-            "Location / Mode",
-            "Platform",
-            "Apply Action",
-            "Application Status",
-            "Referral / Notes"
-        ]
+            headers = [
+                "Sl. No",
+                "Lead Status",
+                "Date Posted",
+                "Company Name",
+                "Job Title / Role",
+                "Main Skills Required",
+                "Experience Level",
+                "Location / Mode",
+                "Platform",
+                "Apply Action",
+                "Application Status",
+                "Referral / Notes"
+            ]
+            ws.append(headers)
 
-        ws.append(headers)
+            # Pre-allocated Theme Colors, Fonts & Alignments
+            header_fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
+            header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
 
-        # Theme Colors & Styles
-        header_fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")  # Dark Slate
-        header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
-        
-        row_alt_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid") # Soft cool grey
-        row_white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-        
-        apply_btn_fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid") # Vibrant Blue
-        apply_btn_font = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF", underline="single")
-        
-        skill_font = Font(name="Segoe UI Semibold", size=10, color="047857") # Emerald Green
-        standard_font = Font(name="Segoe UI", size=10, color="1E293B")
-        company_font = Font(name="Segoe UI", size=10, bold=True, color="0F172A")
-        applied_font = Font(name="Segoe UI Semibold", size=10, color="2563EB")
-        
-        thin_border = Border(
-            left=Side(style='thin', color='E2E8F0'),
-            right=Side(style='thin', color='E2E8F0'),
-            top=Side(style='thin', color='E2E8F0'),
-            bottom=Side(style='thin', color='E2E8F0')
-        )
+            row_alt_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+            row_white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
 
-        # Style Header Row
-        ws.row_dimensions[1].height = 28
-        for col_idx, header in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col_idx)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            cell.border = thin_border
+            apply_btn_fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+            apply_btn_font = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF", underline="single")
 
-        if jobs_df is None or jobs_df.empty:
-            ws.append([1, "N/A", "N/A", "No Jobs Found", "Try adjusting search query or location", "-", "-", "-", "-", "No Link", "Not Applied", ""])
-        else:
-            # Populate Job Rows
-            for idx, row in jobs_df.iterrows():
-                row_idx = ws.max_row + 1
-                ws.row_dimensions[row_idx].height = 24
-                
-                is_even = (row_idx % 2 == 0)
-                current_fill = row_alt_fill if is_even else row_white_fill
+            skill_font = Font(name="Segoe UI Semibold", size=10, color="047857")
+            standard_font = Font(name="Segoe UI", size=10, color="1E293B")
+            company_font = Font(name="Segoe UI", size=10, bold=True, color="0F172A")
+            applied_font = Font(name="Segoe UI Semibold", size=10, color="2563EB")
+            new_lead_font = Font(name="Segoe UI", size=10, bold=True, color="047857")
+            seen_lead_font = Font(name="Segoe UI", size=10, color="64748B")
+            summary_val_font = Font(name="Segoe UI Semibold", size=10, color="0F172A")
 
-                lead_status = str(row.get("lead_status", "🟢 NEW"))
-                date_posted = str(row.get("formatted_date", "Recent"))
-                company = str(row.get("company", "Hiring Company"))
-                title = str(row.get("title", "Job Role"))
-                skills = str(row.get("extracted_skills", "Data Analysis, Problem Solving"))
-                exp = str(row.get("extracted_experience", "Not Specified"))
-                work_mode = str(row.get("work_mode", row.get("location", "Hyderabad, India")))
-                platform = str(row.get("site", "Web")).capitalize()
-                apply_url = str(row.get("final_apply_url", ""))
+            align_center = Alignment(horizontal="center", vertical="center")
+            align_header = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            align_left = Alignment(vertical="center")
+            align_indent = Alignment(vertical="center", indent=1)
 
-                # Memory lookup: check URL or company::title in applications_ledger
-                norm_url = re.sub(r'\?.*$', '', apply_url).strip().lower() if apply_url else ""
-                fallback_key = f"{company.strip().lower()}::{title.strip().lower()}"
-                saved_entry = self.applications_ledger.get(norm_url) or self.applications_ledger.get(fallback_key)
-                
-                if saved_entry:
-                    status_val = saved_entry.get("status", "Not Applied")
-                    notes_val = saved_entry.get("notes", "")
-                else:
-                    status_val = "Not Applied"
-                    notes_val = ""
-
-                # Populate cells
-                c1 = ws.cell(row=row_idx, column=1, value=idx + 1)
-                c2 = ws.cell(row=row_idx, column=2, value=lead_status)
-                c3 = ws.cell(row=row_idx, column=3, value=date_posted)
-                c4 = ws.cell(row=row_idx, column=4, value=company)
-                c5 = ws.cell(row=row_idx, column=5, value=title)
-                c6 = ws.cell(row=row_idx, column=6, value=skills)
-                c7 = ws.cell(row=row_idx, column=7, value=exp)
-                c8 = ws.cell(row=row_idx, column=8, value=work_mode)
-                c9 = ws.cell(row=row_idx, column=9, value=platform)
-                c10 = ws.cell(row=row_idx, column=10)
-                c11 = ws.cell(row=row_idx, column=11, value=status_val)
-                c12 = ws.cell(row=row_idx, column=12, value=notes_val)
-
-                for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c11, c12]:
-                    c.fill = current_fill
-                    c.border = thin_border
-                    c.alignment = Alignment(vertical="center")
-
-                c1.alignment = Alignment(horizontal="center", vertical="center")
-                if "NEW" in lead_status:
-                    c2.font = Font(name="Segoe UI", size=10, bold=True, color="047857")
-                else:
-                    c2.font = Font(name="Segoe UI", size=10, color="64748B")
-                c2.alignment = Alignment(horizontal="center", vertical="center")
-                c3.alignment = Alignment(horizontal="center", vertical="center")
-                c4.font = company_font
-                c5.font = standard_font
-                c6.font = skill_font
-                c7.alignment = Alignment(horizontal="center", vertical="center")
-                c9.alignment = Alignment(horizontal="center", vertical="center")
-                c11.alignment = Alignment(horizontal="center", vertical="center")
-                if status_val and status_val != "Not Applied":
-                    c11.font = applied_font
-
-                # Native openpyxl Hyperlink
-                c10.border = thin_border
-                if apply_url and apply_url.startswith("http"):
-                    c10.value = "Apply Now"
-                    c10.hyperlink = apply_url
-                    c10.font = apply_btn_font
-                    c10.fill = apply_btn_fill
-                    c10.alignment = Alignment(horizontal="center", vertical="center")
-                else:
-                    c10.value = "Link Unavailable"
-                    c10.font = standard_font
-                    c10.fill = current_fill
-                    c10.alignment = Alignment(horizontal="center", vertical="center")
-
-        # Add Status Dropdown Data Validation (Column K)
-        if ws.max_row >= 2:
-            status_list_str = f'"{",".join(self.status_options)}"'
-            status_dv = DataValidation(
-                type="list",
-                formula1=status_list_str,
-                allow_blank=True,
-                showErrorMessage=True
+            thin_border = Border(
+                left=Side(style='thin', color='E2E8F0'),
+                right=Side(style='thin', color='E2E8F0'),
+                top=Side(style='thin', color='E2E8F0'),
+                bottom=Side(style='thin', color='E2E8F0')
             )
-            status_dv.error = "Please select a valid application status"
-            status_dv.errorTitle = "Invalid Status"
-            ws.add_data_validation(status_dv)
-            status_dv.add(f"K2:K{ws.max_row}")
 
-        # Enable Auto-filter across all columns
-        last_col_letter = get_column_letter(len(headers))
-        ws.auto_filter.ref = f"A1:{last_col_letter}{ws.max_row}"
+            # Style Header Row
+            ws.row_dimensions[1].height = 28
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = align_header
+                cell.border = thin_border
 
-        # Freeze Header Row
-        ws.freeze_panes = "A2"
+            if jobs_df is None or jobs_df.empty:
+                ws.append([
+                    1, "N/A", "N/A", "No Jobs Found",
+                    "Try adjusting search query or location",
+                    "-", "-", "-", "-", "No Link", "Not Applied", ""
+                ])
+            else:
+                for row_num, (_, row) in enumerate(jobs_df.iterrows(), 1):
+                    row_idx = ws.max_row + 1
+                    ws.row_dimensions[row_idx].height = 24
 
-        # Dynamic Column Widths for Tab 1
-        col_widths = {
-            1: 8,   # Sl No
-            2: 15,  # Lead Status
-            3: 14,  # Date Posted
-            4: 26,  # Company Name
-            5: 34,  # Job Title
-            6: 35,  # Main Skills Required
-            7: 22,  # Experience Level
-            8: 22,  # Location / Mode
-            9: 15,  # Platform
-            10: 18, # Apply Action
-            11: 20, # Application Status
-            12: 28  # Notes
-        }
+                    is_even = (row_idx % 2 == 0)
+                    current_fill = row_alt_fill if is_even else row_white_fill
 
-        for col_idx, width in col_widths.items():
-            col_letter = get_column_letter(col_idx)
-            ws.column_dimensions[col_letter].width = width
+                    lead_status = str(row.get("lead_status", "🟢 NEW"))
+                    date_posted = str(row.get("formatted_date", "Recent"))
+                    company_raw = str(row.get("company", "Hiring Company"))
+                    title_raw = str(row.get("title", "Job Role"))
+                    skills_raw = str(row.get("extracted_skills", "Data Analysis, Problem Solving"))
+                    exp_raw = str(row.get("extracted_experience", "Not Specified"))
+                    work_mode_raw = str(row.get("work_mode", row.get("location", "Hyderabad, India")))
+                    platform_raw = str(row.get("site", "Web")).capitalize()
+                    apply_url = str(row.get("final_apply_url", "")).strip()
 
-        # Build Tab 2: Run Summary
-        ws_summary = wb.create_sheet(title="Run Summary")
-        ws_summary.views.sheetView[0].showGridLines = True
-        ws_summary.append(["Audit Metric", "Value"])
-        ws_summary.row_dimensions[1].height = 26
+                    # Memory lookup: check canonical URL or company::title in applications_ledger
+                    norm_url = canonicalize_job_url(apply_url) if apply_url else ""
+                    fallback_key = f"{company_raw.strip().lower()}::{title_raw.strip().lower()}"
+                    saved_entry = (
+                        (self.applications_ledger.get(norm_url) if norm_url else None)
+                        or self.applications_ledger.get(fallback_key)
+                    )
 
-        for col_idx in [1, 2]:
-            cell = ws_summary.cell(row=1, column=col_idx)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            cell.border = thin_border
+                    if saved_entry:
+                        status_val = saved_entry.get("status", "Not Applied")
+                        notes_val = saved_entry.get("notes", "")
+                    else:
+                        status_val = "Not Applied"
+                        notes_val = ""
 
-        stats = run_stats or {}
-        mode_val = str(stats.get("mode", "frugal")).upper()
-        total_leads_val = len(jobs_df) if jobs_df is not None else 0
-        fc_cands = stats.get("fc_candidates", 0)
-        credits_val = stats.get("credits_used", 0)
-        sr_dropped = stats.get("dropped_senior_title", 0)
-        ceil_dropped = stats.get("dropped_experience_ceiling", 0)
-        ts_val = stats.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M"))
+                    c1 = ws.cell(row=row_idx, column=1, value=row_num)
+                    c2 = ws.cell(row=row_idx, column=2, value=self._sanitize_cell_value(lead_status))
+                    c3 = ws.cell(row=row_idx, column=3, value=self._sanitize_cell_value(date_posted))
+                    c4 = ws.cell(row=row_idx, column=4, value=self._sanitize_cell_value(company_raw))
+                    c5 = ws.cell(row=row_idx, column=5, value=self._sanitize_cell_value(title_raw))
+                    c6 = ws.cell(row=row_idx, column=6, value=self._sanitize_cell_value(skills_raw))
+                    c7 = ws.cell(row=row_idx, column=7, value=self._sanitize_cell_value(exp_raw))
+                    c8 = ws.cell(row=row_idx, column=8, value=self._sanitize_cell_value(work_mode_raw))
+                    c9 = ws.cell(row=row_idx, column=9, value=self._sanitize_cell_value(platform_raw))
+                    c10 = ws.cell(row=row_idx, column=10)
+                    c11 = ws.cell(row=row_idx, column=11, value=self._sanitize_cell_value(status_val))
+                    c12 = ws.cell(row=row_idx, column=12, value=self._sanitize_cell_value(notes_val))
 
-        summary_rows = [
-            ("Run Timestamp", ts_val),
-            ("Scraping Mode", mode_val),
-            ("Total Raw Candidates Gathered", fc_cands + total_leads_val),
-            ("Senior Roles Filtered", sr_dropped),
-            ("Experience Ceiling Filtered (> 2 YOE)", ceil_dropped),
-            ("Final Verified Leads Retained", total_leads_val),
-            ("Firecrawl Credits Consumed", credits_val)
-        ]
+                    for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c11, c12]:
+                        c.fill = current_fill
+                        c.border = thin_border
+                        c.alignment = align_left
 
-        for r_idx, (metric, val) in enumerate(summary_rows, 2):
-            ws_summary.row_dimensions[r_idx].height = 22
-            c_m = ws_summary.cell(row=r_idx, column=1, value=metric)
-            c_v = ws_summary.cell(row=r_idx, column=2, value=val)
+                    c1.alignment = align_center
+                    c2.font = new_lead_font if "NEW" in lead_status else seen_lead_font
+                    c2.alignment = align_center
+                    c3.alignment = align_center
+                    c4.font = company_font
+                    c5.font = standard_font
+                    c6.font = skill_font
+                    c7.alignment = align_center
+                    c9.alignment = align_center
+                    c11.alignment = align_center
+                    c11.font = applied_font if (status_val and status_val != "Not Applied") else standard_font
+                    c12.font = standard_font
 
-            c_fill = row_alt_fill if (r_idx % 2 == 0) else row_white_fill
-            c_m.fill = c_fill
-            c_m.font = standard_font
-            c_m.border = thin_border
-            c_m.alignment = Alignment(vertical="center", indent=1)
+                    # Native openpyxl Hyperlink
+                    c10.border = thin_border
+                    if apply_url and apply_url.lower().startswith(("http://", "https://")):
+                        c10.value = "Apply Now"
+                        c10.hyperlink = apply_url
+                        c10.font = apply_btn_font
+                        c10.fill = apply_btn_fill
+                        c10.alignment = align_center
+                    else:
+                        c10.value = "Link Unavailable"
+                        c10.font = standard_font
+                        c10.fill = current_fill
+                        c10.alignment = align_center
 
-            c_v.fill = c_fill
-            c_v.font = Font(name="Segoe UI Semibold", size=10, color="0F172A")
-            c_v.border = thin_border
-            c_v.alignment = Alignment(horizontal="center", vertical="center")
+            # Add Status Dropdown Data Validation (Column K)
+            if ws.max_row >= 2:
+                status_list_str = f'"{",".join(self.status_options)}"'
+                status_dv = DataValidation(
+                    type="list",
+                    formula1=status_list_str,
+                    allow_blank=True,
+                    showErrorMessage=True
+                )
+                status_dv.error = "Please select a valid application status"
+                status_dv.errorTitle = "Invalid Status"
+                ws.add_data_validation(status_dv)
+                status_dv.add(f"K2:K{ws.max_row}")
 
-        ws_summary.column_dimensions["A"].width = 40
-        ws_summary.column_dimensions["B"].width = 24
+            # Enable Auto-filter across all columns
+            last_col_letter = get_column_letter(len(headers))
+            ws.auto_filter.ref = f"A1:{last_col_letter}{ws.max_row}"
 
-        saved_file = self._safe_save(wb, primary_target)
-        if save_stable:
-            self._safe_save(wb, self.stable_filename)
+            # Freeze Header Row
+            ws.freeze_panes = "A2"
 
-        print(f"\n[+] Excel Workbook successfully created: {os.path.abspath(saved_file)}")
-        return saved_file
+            # Dynamic Column Widths for Tab 1
+            col_widths = {
+                1: 8,   # Sl No
+                2: 15,  # Lead Status
+                3: 14,  # Date Posted
+                4: 26,  # Company Name
+                5: 34,  # Job Title
+                6: 35,  # Main Skills Required
+                7: 22,  # Experience Level
+                8: 22,  # Location / Mode
+                9: 15,  # Platform
+                10: 18, # Apply Action
+                11: 20, # Application Status
+                12: 28  # Notes
+            }
+            for col_idx, width in col_widths.items():
+                col_letter = get_column_letter(col_idx)
+                ws.column_dimensions[col_letter].width = width
+
+            # Build Tab 2: Run Summary
+            ws_summary = wb.create_sheet(title="Run Summary")
+            ws_summary.views.sheetView[0].showGridLines = True
+            ws_summary.append(["Audit Metric", "Value"])
+            ws_summary.row_dimensions[1].height = 26
+
+            for col_idx in [1, 2]:
+                cell = ws_summary.cell(row=1, column=col_idx)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = align_center
+                cell.border = thin_border
+
+            stats = run_stats or {}
+            mode_val = str(stats.get("mode", "frugal")).upper()
+            total_leads_val = len(jobs_df) if jobs_df is not None else 0
+            fc_cands = int(stats.get("fc_candidates", 0) or 0)
+            if "jobspy_candidates" in stats:
+                jobspy_cands = int(stats.get("jobspy_candidates", 0) or 0)
+            else:
+                jobspy_cands = int(stats.get("jobspy_retained", total_leads_val) or 0)
+            total_raw_candidates = fc_cands + jobspy_cands
+
+            credits_val = stats.get("credits_used", 0)
+            sr_dropped = stats.get("dropped_senior_title", 0)
+            ceil_dropped = stats.get("dropped_experience_ceiling", 0)
+            ts_val = stats.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+            summary_rows = [
+                ("Run Timestamp", ts_val),
+                ("Scraping Mode", mode_val),
+                ("Total Raw Candidates Gathered", total_raw_candidates),
+                ("Senior Roles Filtered", sr_dropped),
+                ("Experience Ceiling Filtered (> 2 YOE)", ceil_dropped),
+                ("Final Verified Leads Retained", total_leads_val),
+                ("Firecrawl Credits Consumed", credits_val)
+            ]
+
+            for r_idx, (metric, val) in enumerate(summary_rows, 2):
+                ws_summary.row_dimensions[r_idx].height = 22
+                c_m = ws_summary.cell(row=r_idx, column=1, value=metric)
+                c_v = ws_summary.cell(row=r_idx, column=2, value=val)
+
+                c_fill = row_alt_fill if (r_idx % 2 == 0) else row_white_fill
+                c_m.fill = c_fill
+                c_m.font = standard_font
+                c_m.border = thin_border
+                c_m.alignment = align_indent
+
+                c_v.fill = c_fill
+                c_v.font = summary_val_font
+                c_v.border = thin_border
+                c_v.alignment = align_center
+
+            ws_summary.column_dimensions["A"].width = 40
+            ws_summary.column_dimensions["B"].width = 24
+
+            saved_file = self._safe_save(wb, primary_target)
+            if save_stable:
+                saved_stable = self._safe_save(wb, self.stable_filename)
+                # Align mtime at generation so any subsequent user edit to either file is strictly newer
+                try:
+                    st = os.stat(saved_file)
+                    os.utime(saved_stable, (st.st_atime, st.st_mtime))
+                except OSError:
+                    pass
+
+            print(f"\n[+] Excel Workbook successfully created: {os.path.abspath(saved_file)}")
+            return saved_file
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
 
     def _safe_save(self, wb, output_path: str) -> str:
-        """Saves workbook safely, falling back if the target file is locked by Excel."""
+        """Saves workbook safely, falling back if the target or fallback file is locked by Excel."""
+        parent = os.path.dirname(os.path.abspath(output_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         try:
             wb.save(output_path)
             return output_path
@@ -413,5 +570,10 @@ class ExcelDashboardGenerator:
             fallback_path = f"{base}_Latest{ext}"
             print(f"\n[!] Warning: '{output_path}' is currently open in Excel.")
             print(f"    Saving clean copy to: '{fallback_path}' instead.")
-            wb.save(fallback_path)
-            return fallback_path
+            try:
+                wb.save(fallback_path)
+                return fallback_path
+            except PermissionError:
+                ts_fallback = f"{base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+                wb.save(ts_fallback)
+                return ts_fallback
