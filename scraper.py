@@ -3,6 +3,7 @@ import re
 import json
 import time
 import logging
+import tempfile
 import requests
 import pandas as pd
 from datetime import datetime
@@ -99,6 +100,10 @@ class MultiPlatformJobScraper:
     _FRESHER_WORD_RE = re.compile(
         r'\b(?:fresher|freshers|intern|internship|entry[\s-]*level|trainee|new\s+grad|fresh\s+graduate)\b'
     )
+    _LINKEDIN_CITY_SUFFIX_RE = re.compile(
+        r'\s*[-–—]\s*(?:Greater\s+)?(?:' + '|'.join(sorted(KNOWN_CITIES, key=len, reverse=True)) + r')\b.*$',
+        re.IGNORECASE
+    )
 
     def __init__(self, config: Dict[str, Any], active_mode: str = "balanced"):
         self.config = config.get("search", {})
@@ -115,7 +120,9 @@ class MultiPlatformJobScraper:
         self.search_limit_per_role = mode_settings.get("search_limit_per_role", 4)
         self.deep_scrape = mode_settings.get("deep_scrape", True)
         self.timeout = mode_settings.get("timeout", 60 if self.deep_scrape else 20)
-        self.max_experience_years = int(self.config.get("max_experience_years", 2))
+        self.max_experience_years = int(
+            self.config.get("max_experience_years", config.get("max_experience_years", 2))
+        )
 
         # Per-engine retention stats, funnel counters, and candidate count for analytics
         self.last_run_stats = {
@@ -131,8 +138,13 @@ class MultiPlatformJobScraper:
             "dropped_experience_ceiling": 0,
         }
 
-        # Persistent seen jobs ledger (45-day retention to exceed 30-day Naukri window)
-        self.seen_jobs_file = self.output_config.get("seen_jobs_file", "seen_jobs.json")
+        # Persistent seen jobs ledger (45-day retention to exceed Naukri window)
+        self.seen_jobs_file = (
+            self.output_config.get("seen_jobs_file")
+            or self.config.get("seen_jobs_file")
+            or config.get("seen_jobs_file")
+            or "seen_jobs.json"
+        )
         self.seen_jobs = self._load_seen_jobs(max_days=45)
 
     def _load_seen_jobs(self, max_days: int = 45) -> Dict[str, str]:
@@ -160,13 +172,29 @@ class MultiPlatformJobScraper:
         except Exception:
             return {}
 
-    def _save_seen_jobs(self):
-        """Saves updated seen job URLs to persistent JSON file."""
+    def _save_seen_jobs(self) -> None:
+        """Atomically saves updated seen job URLs to persistent JSON file using tempfile + os.replace."""
+        abs_target = os.path.abspath(self.seen_jobs_file)
+        parent_dir = os.path.dirname(abs_target)
+        os.makedirs(parent_dir, exist_ok=True)
+        tmp_path = None
         try:
-            with open(self.seen_jobs_file, "w", encoding="utf-8") as f:
-                json.dump(self.seen_jobs, f, indent=2)
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=parent_dir, delete=False, encoding="utf-8", suffix=".tmp"
+            ) as tmp_f:
+                tmp_path = tmp_f.name
+                json.dump(self.seen_jobs, tmp_f, indent=2)
+                tmp_f.flush()
+                os.fsync(tmp_f.fileno())
+            os.replace(tmp_path, abs_target)
         except Exception as e:
-            print(f"[!] Warning: Could not save seen_jobs.json: {e}")
+            print(f"[!] Warning: Could not save {self.seen_jobs_file}: {e}")
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     def get_remaining_credits(self) -> Optional[int]:
         """
@@ -286,7 +314,7 @@ class MultiPlatformJobScraper:
 
         combined_df = pd.concat(all_results, ignore_index=True)
 
-        # Deduplicate based on canonical URL and company/title/location
+        # Deduplicate based on canonical URL and cross-platform company/title/location
         print(f"\n[*] Total raw direct jobs collected: {len(combined_df)}")
         deduped_df = self._deduplicate_jobs(combined_df)
         print(f"[*] Total unique verified jobs after deduplication: {len(deduped_df)}")
@@ -636,7 +664,7 @@ class MultiPlatformJobScraper:
                     company = parts[0].strip()
                     role = parts[1].split(" in ")[0].strip()
 
-            company = re.sub(r'\s*[-–]\s*(?:Greater\s+)?Hyderabad.*$', '', company, flags=re.I).strip()
+            company = self._LINKEDIN_CITY_SUFFIX_RE.sub('', company).strip()
 
         else:
             role = raw_title.split(" - ")[0].strip()
@@ -776,9 +804,10 @@ class MultiPlatformJobScraper:
     def _deduplicate_jobs(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Removes duplicate postings using two-stage deduplication:
-        1. Exact canonical URL match (preserving distinct ?jk= / ATS query IDs while collapsing UTM variants)
-        2. Fallback (clean_company, clean_title, clean_location) match for cross-board duplicates
-           that do not have distinct canonical URLs on the same host.
+        1. Exact canonical URL match (preserving distinct ?jk= / ATS query IDs while collapsing UTM variants).
+        2. Cross-platform (clean_company, clean_title, clean_location) match so identical requisitions
+           scraped across different job boards (e.g. Naukri vs LinkedIn) are deduplicated, while
+           preserving multiple distinct openings from the same company on the same board.
         """
         if df.empty:
             return df
@@ -793,26 +822,50 @@ class MultiPlatformJobScraper:
             drop_indices = url_dups[url_dups].index
             work_df.drop(index=drop_indices, inplace=True)
 
-        # Stage 2: Deduplicate on (company, title, location), keeping distinct canonical URLs if both are valid
+        # Stage 2: Cross-platform deduplication on (clean_company, clean_title, clean_location)
         work_df["clean_company"] = work_df["company"].fillna("").astype(str).str.strip().str.lower()
         work_df["clean_title"] = work_df["title"].fillna("").astype(str).str.strip().str.lower()
         work_df["clean_location"] = work_df["location"].fillna("").astype(str).str.strip().str.lower()
 
-        work_df = work_df.drop_duplicates(
-            subset=["clean_company", "clean_title", "clean_location", "_canon_url"],
-            keep="first"
-        ).copy()
+        def _extract_host(c_url: str) -> str:
+            if not c_url:
+                return ""
+            try:
+                return (urlsplit(c_url).hostname or "").lower()
+            except Exception:
+                return ""
 
-        # Also deduplicate rows where _canon_url was empty and (company, title, location) matched
-        empty_url_mask = work_df["_canon_url"] == ""
-        if empty_url_mask.any():
-            work_df = work_df.drop_duplicates(
-                subset=["clean_company", "clean_title", "clean_location"],
-                keep="first"
-            ).copy()
+        work_df["_host"] = work_df["_canon_url"].apply(_extract_host)
 
-        work_df.drop(columns=["clean_company", "clean_title", "clean_location", "_canon_url"], inplace=True)
-        return work_df
+        seen_triplets: Dict[Tuple[str, str, str], str] = {}
+        drop_stage2 = []
+        for idx, row in work_df.iterrows():
+            co = row["clean_company"]
+            ti = row["clean_title"]
+            loc = row["clean_location"]
+            host = row["_host"]
+            canon_u = row["_canon_url"]
+
+            if not co or not ti:
+                continue
+
+            triplet = (co, ti, loc)
+            if triplet not in seen_triplets:
+                seen_triplets[triplet] = host
+            else:
+                first_host = seen_triplets[triplet]
+                # Drop if missing canonical URL or if coming from a different board/host for the same role
+                if not canon_u or not first_host or host != first_host:
+                    drop_stage2.append(idx)
+
+        if drop_stage2:
+            work_df.drop(index=drop_stage2, inplace=True)
+
+        work_df.drop(
+            columns=["clean_company", "clean_title", "clean_location", "_canon_url", "_host"],
+            inplace=True
+        )
+        return work_df.copy()
 
     def _enrich_jobs(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -840,7 +893,7 @@ class MultiPlatformJobScraper:
             else:
                 final_url_str = u_direct or u_job or ""
 
-            # Finding: Drop stale Naukri postings older than 30 days
+            # Finding: Drop stale Naukri postings older than 14 days
             naukri_date = None
             date_status = None
             final_host = (urlsplit(final_url_str).hostname or "").lower() if final_url_str else ""

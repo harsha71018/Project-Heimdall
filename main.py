@@ -24,6 +24,7 @@ RUN_LOG_HEADERS = [
     "dropped_senior_title", "dropped_experience_ceiling"
 ]
 
+
 def migrate_and_append_run_log(log_file: str, row_data: dict) -> bool:
     """
     Logs run analytics to run_log.csv with backward-compatible schema migration.
@@ -136,7 +137,7 @@ def load_config(config_path: str = "config.yaml") -> dict:
             "search": {
                 "job_titles": ["Data Analyst"],
                 "location": "Hyderabad",
-                "hours_old": 72,
+                "hours_old": 24,
                 "results_wanted_per_role": 20,
                 "platforms": ["linkedin", "indeed", "glassdoor"],
                 "indeed_country": "india"
@@ -153,6 +154,7 @@ def load_config(config_path: str = "config.yaml") -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
+
 def parse_args():
     """Parses command-line arguments."""
     parser = argparse.ArgumentParser(description="Automated Multi-Platform Job Hunter & Excel Generator")
@@ -165,17 +167,14 @@ def parse_args():
     parser.add_argument("--dry-run", action="store_true", help="Validate configuration and simulate run without scraping")
     return parser.parse_args()
 
+
 def main():
     args = parse_args()
     config = load_config(args.config)
 
-    # Determine Active Mode (CLI flag > config default_mode > "balanced")
-    active_mode = args.mode or config.get("default_mode", "balanced")
-    
-    # Initialize scraper with active mode (single source of truth)
-    scraper = MultiPlatformJobScraper(config, active_mode=active_mode)
-
-    # Apply CLI overrides if provided
+    # Apply CLI overrides BEFORE initializing scraper
+    config.setdefault("search", {})
+    config.setdefault("output", {})
     if args.role:
         config["search"]["job_titles"] = [args.role]
     if args.location:
@@ -184,6 +183,12 @@ def main():
         config["search"]["hours_old"] = args.hours
     if args.output:
         config["output"]["filename"] = args.output
+
+    # Determine Active Mode (CLI flag > config default_mode > "balanced")
+    active_mode = args.mode or config.get("default_mode", "balanced")
+
+    # Initialize scraper with active mode and overridden config
+    scraper = MultiPlatformJobScraper(config, active_mode=active_mode)
 
     roles = config["search"].get("job_titles", [])
     location = config["search"].get("location", "Hyderabad")
@@ -297,6 +302,7 @@ def main():
     print(" 3. Click the 'Apply Now' button in column J to jump straight to the post/careers page.")
     print(" 4. Update the 'Application Status' dropdown as you apply in column K.")
     print("=" * 70)
+
 
 if __name__ == "__main__":
     main()

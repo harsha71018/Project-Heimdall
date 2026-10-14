@@ -13,6 +13,7 @@ from main import migrate_and_append_run_log, format_run_log_status, RUN_LOG_HEAD
 
 class TestURLAllowDeny(unittest.TestCase):
     def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
         config = {
             "search": {
                 "job_titles": ["Data Analyst"],
@@ -22,9 +23,15 @@ class TestURLAllowDeny(unittest.TestCase):
             },
             "modes": {
                 "frugal": {"search_limit_per_role": 5, "deep_scrape": False}
+            },
+            "output": {
+                "seen_jobs_file": os.path.join(self.temp_dir.name, "seen_jobs.json")
             }
         }
         self.scraper = MultiPlatformJobScraper(config, active_mode="frugal")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
 
     def test_positive_platforms_and_portals(self):
         valid_job_urls = [
@@ -238,8 +245,17 @@ class TestURLAllowDeny(unittest.TestCase):
 
 class TestExperienceCeiling(unittest.TestCase):
     def setUp(self):
-        config = {"max_experience_years": 2}
+        self.temp_dir = tempfile.TemporaryDirectory()
+        config = {
+            "max_experience_years": 2,
+            "output": {
+                "seen_jobs_file": os.path.join(self.temp_dir.name, "seen_jobs.json")
+            }
+        }
         self.scraper = MultiPlatformJobScraper(config)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
 
     def test_bidirectional_mixed_ranges(self):
         # Forward: months to years
@@ -282,8 +298,21 @@ class TestContextAwareExtractor(unittest.TestCase):
         exp = self.extractor.extract_experience(desc)
         self.assertEqual(exp, "1 To 2 Years")
 
+    def test_endash_and_yoe_extracted(self):
+        desc_endash = "Role requires 5–8 years of hands-on experience in data warehousing."
+        self.assertEqual(self.extractor.extract_experience(desc_endash), "5–8 Years")
+        desc_yoe = "Looking for candidates with 4+ YOE in SQL and Python."
+        self.assertEqual(self.extractor.extract_experience(desc_yoe), "4+ Yoe")
+
 
 class TestNaukriDateHandling(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.seen_jobs_file = os.path.join(self.temp_dir.name, "seen_jobs.json")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
     def test_date_decoder_calendar_and_bounds(self):
         # Stale date from 2021
         url_stale = "https://www.naukri.com/job-listings-analyst-1-to-2-years-041021500967"
@@ -305,7 +334,10 @@ class TestNaukriDateHandling(unittest.TestCase):
         self.assertIsNone(d_invalid)
 
     def test_enrich_jobs_date_filtering_and_funnel(self):
-        config = {"max_experience_years": 2}
+        config = {
+            "max_experience_years": 2,
+            "output": {"seen_jobs_file": self.seen_jobs_file}
+        }
         scraper = MultiPlatformJobScraper(config)
 
         today = datetime.now().date()
@@ -322,7 +354,7 @@ class TestNaukriDateHandling(unittest.TestCase):
                 "job_url": None,
                 "description": "SQL and Python skills needed."
             },
-            # 2. Stale Naukri job (>30 days) -> should be dropped
+            # 2. Stale Naukri job -> should be dropped
             {
                 "title": "Data Analyst",
                 "company": "Company B",
@@ -389,7 +421,6 @@ class TestRunLogMigrationAndSafety(unittest.TestCase):
         self.test_dir.cleanup()
 
     def test_legacy_7_column_migration(self):
-        # 7-col format
         headers_7 = ["timestamp", "mode", "credits_used", "fc_candidates", "fc_retained", "jobspy_retained", "total_unique_jobs"]
         sample_row = ["2026-03-01 10:00", "balanced", "10", "4", "2", "5", "7"]
         with open(self.log_file, "w", newline="", encoding="utf-8") as f:
@@ -421,7 +452,6 @@ class TestRunLogMigrationAndSafety(unittest.TestCase):
 
         self.assertEqual(reader[0], RUN_LOG_HEADERS)
         self.assertEqual(len(reader), 3)  # header + migrated row + new row
-        # Check migrated row has N/A for fc_markdown_hits and funnel columns
         migrated = reader[1]
         self.assertEqual(migrated[4], "N/A")  # fc_markdown_hits
         self.assertEqual(migrated[8:], ["N/A", "N/A", "N/A", "N/A", "N/A"])
@@ -458,7 +488,6 @@ class TestRunLogMigrationAndSafety(unittest.TestCase):
 
         self.assertEqual(reader[0], RUN_LOG_HEADERS)
         self.assertEqual(len(reader), 3)
-        # Check preserved fc_markdown_hits
         migrated = reader[1]
         self.assertEqual(migrated[4], "3")  # preserved
         self.assertEqual(migrated[8:], ["N/A", "N/A", "N/A", "N/A", "N/A"])

@@ -1,0 +1,117 @@
+# ==============================================================================
+# IT Support & ServiceNow Job Hunter Configuration
+# ==============================================================================
+
+search:
+  # Target job roles
+  job_titles:
+    - "Service Desk"
+    - "End User Support"
+    - "L1 Support"
+    - "ITSM Analyst"
+    - "IT Infra"
+    - "ServiceNow Developer"
+    - "ServiceNow Administrator"
+    - "ServiceNow Associate"
+
+  # Target Locations
+  locations:
+    - "Hyderabad"
+    - "Bengaluru"
+
+  # Experience level filter & ceiling gate
+  experience_filter: "0-2 years"
+  max_experience_years: 2      # Strict ceiling: discard jobs requiring > 2 years minimum
+  
+  # Max age of job postings in hours (72h for fresh listings)
+  hours_old: 72
+  
+  # Target number of jobs to fetch per title via JobSpy
+  results_wanted_per_role: 10
+  
+  # Platforms to search across: linkedin, indeed
+  platforms:
+    - "linkedin"
+    - "indeed"
+    
+  indeed_country: "india"
+
+  # Separate seen jobs tracking for IT Support
+  seen_jobs_file: "seen_jobs_it_support.json"
+
+# ==============================================================================
+# Scraping Modes & Firecrawl Engine Configuration
+# ==============================================================================
+default_mode: "frugal"  # Fast SERP snippets (lightest credit usage)
+
+modes:
+  frugal:
+    search_limit_per_role: 8
+    deep_scrape: false
+    timeout: 20
+    description: "Fast SERP snippets"
+
+  balanced:
+    search_limit_per_role: 4
+    deep_scrape: true
+    timeout: 60
+    description: "Full markdown on top 4 listings per role"
+
+  exhaustive:
+    search_limit_per_role: 8
+    deep_scrape: true
+    timeout: 60
+    description: "Full markdown on top 8 listings per role"
+
+firecrawl:
+  enabled: true
+
+# Skill Extraction & Highlighting tailored to IT Support, Helpdesk & ServiceNow
+skills_filter:
+  target_skills:
+    - "ServiceNow"
+    - "ITIL"
+    - "ITSM"
+    - "Active Directory"
+    - "Office 365"
+    - "O365"
+    - "Hardware"
+    - "Networking"
+    - "VPN"
+    - "Troubleshooting"
+    - "Service Desk"
+    - "Helpdesk"
+    - "Desktop Support"
+    - "Jira"
+    - "Ticketing"
+    - "Incident Management"
+    - "Windows"
+    - "Linux"
+    - "Remote Support"
+    - "IT Infrastructure"
+    - "SLA"
+    - "SQL"
+    - "JavaScript"
+    - "PowerShell"
+    - "Azure"
+    - "AWS"
+
+# Excel Output Settings (Completely isolated from primary Data Analyst pipeline)
+output:
+  filename: "Job_Applications_Tracker_IT_Support.xlsx"
+  stable_filename: "Tracker_Latest_IT_Support.xlsx"
+  leads_dir: "leads_it_support"
+  applications_file: "applications_it_support.json"
+  seen_jobs_file: "seen_jobs_it_support.json"
+  sheet_name: "Active IT Support Leads"
+  run_log: "run_log_it_support.csv"
+  
+  status_options:
+    - "Not Applied"
+    - "Applied"
+    - "Referral Requested"
+    - "Screening Call"
+    - "Interviewing"
+    - "Assessment"
+    - "Rejected"
+    - "Offer Received"

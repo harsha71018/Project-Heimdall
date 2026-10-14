@@ -1,9 +1,10 @@
 import re
 from typing import List, Dict, Any
 
+
 class JobRequirementExtractor:
     """
-    Extracts key skills, years of experience, and employment characteristics 
+    Extracts key skills, years of experience, and employment characteristics
     from raw job descriptions.
     """
 
@@ -15,7 +16,7 @@ class JobRequirementExtractor:
             "Pandas", "NumPy", "Statistics", "Data Modeling", "DAX", "Power Query",
             "Machine Learning", "AI", "Azure", "AWS", "Git", "Snowflake", "BigQuery"
         ]
-        
+
         # Build regex patterns for accurate matching
         self.compiled_skills = []
         for skill in self.target_skills:
@@ -38,7 +39,7 @@ class JobRequirementExtractor:
         for original_name, pattern in self.compiled_skills:
             if pattern.search(description):
                 matched_skills.append(original_name)
-                
+
         return matched_skills
 
     COMPANY_SUBJECT_MARKERS = [
@@ -57,18 +58,23 @@ class JobRequirementExtractor:
     )
 
     def extract_experience(self, description: str) -> str:
-        """Extract experience requirement (e.g. '0-2 years', 'Fresher', 'Entry-Level')."""
+        """Extract experience requirement (e.g. '0-2 years', '3–5 YOE', 'Fresher', 'Entry-Level')."""
         if not description or not isinstance(description, str):
             return "Not Specified"
 
         desc_lower = description.lower()
+        req_verbs = r'(?:minimum|min|at least|requires?|requiring|requirement|must have|should have|looking for|seeking|position requires|role requires)'
+        dash_or_to = r'(?:[-–—]|to)'
+        yr_unit = r'(?:years?|yrs?|yoe)\b'
+        mo_unit = r'(?:months?|mos?)\b'
+        any_unit = r'(?:years?|yrs?|yoe|months?|mos?)\b'
 
         # Tier 1: Explicit candidate requirement expressions (prefixed by requirement verbs)
         req_prefixed_patterns = [
-            r'(?:(?:minimum|min|at least|requires?|requiring|requirement|must have|should have|looking for|seeking|position requires|role requires)\s+)(\d+(?:\.\d+)?\s*(?:months?|mos?)\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?))',
-            r'(?:(?:minimum|min|at least|requires?|requiring|requirement|must have|should have|looking for|seeking|position requires|role requires)\s+)(\d+(?:\.\d+)?\s*(?:years?|yrs?)\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:months?|mos?))',
-            r'(?:(?:minimum|min|at least|requires?|requiring|requirement|must have|should have|looking for|seeking|position requires|role requires)\s+)(\d+(?:\.\d+)?\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?|months?|mos?))',
-            r'(?:(?:minimum|min|at least|requires?|requiring|requirement|must have|should have|looking for|seeking|position requires|role requires)\s+)(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?|months?|mos?)(?:\s+(?:of\s+)?(?:relevant\s+)?exp(?:erience)?)?)',
+            rf'(?:{req_verbs}\s+)(\d+(?:\.\d+)?\+?\s*{mo_unit}\s*{dash_or_to}\s*\d+(?:\.\d+)?\+?\s*{yr_unit})',
+            rf'(?:{req_verbs}\s+)(\d+(?:\.\d+)?\+?\s*{yr_unit}\s*{dash_or_to}\s*\d+(?:\.\d+)?\+?\s*{mo_unit})',
+            rf'(?:{req_verbs}\s+)(\d+(?:\.\d+)?\+?\s*{dash_or_to}\s*\d+(?:\.\d+)?\+?\s*{any_unit})',
+            rf'(?:{req_verbs}\s+)(\d+(?:\.\d+)?\+?\s*{any_unit}(?:\s+(?:of\s+)?(?:relevant\s+)?exp(?:erience)?)?)',
         ]
         for p in req_prefixed_patterns:
             m = re.search(p, desc_lower)
@@ -82,10 +88,10 @@ class JobRequirementExtractor:
 
         # Tier 2: Unprefixed ranges (ranges are candidate requirements, not company age)
         range_patterns = [
-            r'(\d+(?:\.\d+)?\s*(?:months?|mos?)\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?))',
-            r'(\d+(?:\.\d+)?\s*(?:years?|yrs?)\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:months?|mos?))',
-            r'(\d+(?:\.\d+)?\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?))',
-            r'(\d+(?:\.\d+)?\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:months?|mos?))',
+            rf'(\d+(?:\.\d+)?\+?\s*{mo_unit}\s*{dash_or_to}\s*\d+(?:\.\d+)?\+?\s*{yr_unit})',
+            rf'(\d+(?:\.\d+)?\+?\s*{yr_unit}\s*{dash_or_to}\s*\d+(?:\.\d+)?\+?\s*{mo_unit})',
+            rf'(\d+(?:\.\d+)?\+?\s*{dash_or_to}\s*\d+(?:\.\d+)?\+?\s*{yr_unit})',
+            rf'(\d+(?:\.\d+)?\+?\s*{dash_or_to}\s*\d+(?:\.\d+)?\+?\s*{mo_unit})',
         ]
         for p in range_patterns:
             for m in re.finditer(p, desc_lower):
@@ -94,8 +100,8 @@ class JobRequirementExtractor:
 
         # Tier 3: Unprefixed single/plus numbers (evaluated BEFORE fresher keywords)
         numeric_patterns = [
-            r'(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?|months?|mos?)\s*(?:[\'’]s?\s*)?(?:of\s+)?(?:relevant\s+)?exp(?:erience)?)',
-            r'(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?|months?|mos?))'
+            rf'(\d+(?:\.\d+)?\+?\s*{any_unit}\s*(?:[\'’]s?\s*)?(?:of\s+)?(?:relevant\s+)?exp(?:erience)?)',
+            rf'(\d+(?:\.\d+)?\+?\s*{any_unit})'
         ]
         for p in numeric_patterns:
             for m in re.finditer(p, desc_lower):
@@ -112,7 +118,7 @@ class JobRequirementExtractor:
     def extract_work_mode(self, location: str, description: str) -> str:
         """Determine if job is Remote, Hybrid, or On-site."""
         combined_text = f"{location or ''} {description or ''}".lower()
-        
+
         if "remote" in combined_text or "work from home" in combined_text or "wfh" in combined_text:
             return "Remote"
         elif "hybrid" in combined_text:
@@ -132,7 +138,7 @@ class JobRequirementExtractor:
         work_mode = self.extract_work_mode(location, description)
 
         return {
-            "skills": ", ".join(extracted_skills) if extracted_skills else "Data Analysis, Problem Solving",
+            "skills": ", ".join(extracted_skills) if extracted_skills else "General Technical Skills",
             "skills_count": len(extracted_skills),
             "experience": experience,
             "work_mode": work_mode
