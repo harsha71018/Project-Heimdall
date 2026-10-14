@@ -47,6 +47,6 @@ py main_it_support.py --config config_it_support.yaml --mode %MODE%
 
 echo.
 echo =====================================================================
-echo Execution Finished! Excel file created: Job_Applications_Tracker_IT_Support.xlsx
+echo Execution Finished! Excel tracker updated: Tracker_Latest_IT_Support.xlsx
 echo Press any key to exit...
 pause >nul

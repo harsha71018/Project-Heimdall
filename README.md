@@ -26,8 +26,8 @@ Includes a dedicated, isolated pipeline for **IT Support, Helpdesk & ServiceNow*
 ```mermaid
 flowchart TD
     A["User launches run.bat / Task Scheduler"] --> B{"Choose Mode<br/>(Frugal / Balanced / Exhaustive)"}
-    B --> C["Local JobSpy Engine<br/>(LinkedIn, Indeed)"]
-    B --> D["Firecrawl Search v2 Engine<br/>(Naukri & Direct Portals)"]
+    B --> C["Local JobSpy Engine<br/>(LinkedIn, Indeed & Direct ATS Portals)"]
+    B --> D["Firecrawl Search v2 Engine<br/>(Naukri.com Listings)"]
     C --> E["URL Canonicalizer & Multi-Stage Deduplication"]
     D --> E
     E --> F["Senior Title & Slug Gate<br/>(Rejects Sr / Lead / Manager / Director)"]
@@ -39,8 +39,8 @@ flowchart TD
 ```
 
 1. **Dual Scraping Engines**:
-   - **JobSpy (Free, Local)**: Queries LinkedIn and Indeed directly with full description fetching for accurate skill matching.
-   - **Firecrawl Search v2 (Cloud)**: Targets direct Naukri listing paths and corporate career boards with optional full markdown parsing.
+   - **JobSpy (Free, Local)**: Queries LinkedIn and Indeed directly with full description fetching for accurate skill matching, discovering direct corporate ATS application links (Workday, Greenhouse, Taleo) for free.
+   - **Firecrawl Search v2 (Cloud)**: Targets direct Naukri listing paths with optional full markdown parsing to bypass anti-bot protections.
 2. **Strict Quality Gating**:
    - Extracts real experience requirements from Naukri URL slugs (`-1-to-2-years-`) and description bodies.
    - Detects and drops senior listings (`Senior`, `Sr.`, `Lead`, `Manager`, `Architect`, `Principal`, `Director`).
@@ -63,24 +63,29 @@ flowchart TD
 
 ## 🤝 How to Share This Tool with Friends
 
-When sharing this project folder with a friend, follow these privacy rules:
+The pre-built **`JobHunter.zip`** in the root directory contains the clean, universal core Data Analyst pipeline.
 
-### ✅ Files to Send:
+When sharing this project or creating a custom package for a friend, follow these privacy rules:
+
+### ✅ Core Package Files (Included in `JobHunter.zip`):
 - `config.yaml` (their Data Analyst search configuration)
-- `config_it_support.yaml` (their IT Support search configuration)
 - `requirements.txt` (dependencies)
 - `.env.example` (API key template)
 - `extractor.py` (skills extraction logic)
 - `scraper.py` (scraping engine)
 - `excel_generator.py` (Excel builder)
 - `main.py` (Data Analyst CLI orchestrator)
-- `main_it_support.py` (IT Support CLI orchestrator)
 - `run.bat` (1-click interactive runner)
-- `run_it_support.bat` (1-click IT Support runner)
 - `run_scheduled.bat` (headless scheduler runner)
 - `tests/` (unit and regression test suite)
 - `README.md` (this guide)
 - `.gitignore` (prevents accidental credential leaks)
+
+### 🌟 Optional IT Support & ServiceNow Module:
+If your friend specifically targets **IT Support, Desktop Support, or ServiceNow roles**, also include:
+- `config_it_support.yaml` (IT Support / ServiceNow configuration)
+- `main_it_support.py` (Dedicated multi-location IT Support runner)
+- `run_it_support.bat` (1-click IT Support runner)
 
 ### ⛔ NEVER Send These Files:
 - **`.env`** (⚠️ Contains your private API key! Never share this file).

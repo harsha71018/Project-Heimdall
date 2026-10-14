@@ -90,6 +90,10 @@ skills_filter:
 # Excel Output Settings
 output:
   filename: "Job_Applications_Tracker.xlsx"
+  stable_filename: "Tracker_Latest.xlsx"
+  leads_dir: "leads"
+  applications_file: "applications.json"
+  seen_jobs_file: "seen_jobs.json"
   sheet_name: "Active Job Leads"
   
   status_options:

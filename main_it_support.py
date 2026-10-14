@@ -151,6 +151,7 @@ def main():
     parser = argparse.ArgumentParser(description="IT Support & ServiceNow Dedicated Job Hunter")
     parser.add_argument("--mode", type=str, choices=["frugal", "balanced", "exhaustive"], help="Scraping mode")
     parser.add_argument("--config", type=str, default="config_it_support.yaml", help="Path to config file")
+    parser.add_argument("--output", type=str, default=None, help="Custom output Excel file path")
     parser.add_argument("--dry-run", action="store_true", help="Simulate run without making network calls")
     args = parser.parse_args()
 
@@ -222,7 +223,7 @@ def main():
     log_status_str = format_run_log_status(log_updated, log_file)
 
     # Instantiate generator early so applications_it_support.json syncs even on 0-job runs
-    output_filename = config.get("output", {}).get("filename", "Job_Applications_Tracker_IT_Support.xlsx")
+    output_filename = args.output if args.output else None
     dashboard_gen = ExcelDashboardGenerator(config)
 
     if enriched_jobs_df.empty:
