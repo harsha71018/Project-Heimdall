@@ -1,6 +1,8 @@
 # 🎯 Automated Multi-Platform Job Hunter & Application Tracker
 
-An automated job aggregation and tracking engine. It automatically discovers, validates, and filters job postings across **major platforms** (**LinkedIn, Indeed, and Naukri**), enriches listings with extracted skills, eliminates senior roles for 0–2 YOE freshers, tracks lead freshness, and builds a styled, interactive **Excel Application Dashboard** with native **"Apply Now"** buttons and status dropdowns.
+An automated job aggregation and tracking engine. It automatically discovers, validates, and filters job postings across **major platforms** (**LinkedIn, Indeed, and Naukri**), enriches listings with extracted skills, eliminates senior roles for 0–2 YOE freshers, tracks lead freshness, and builds a styled, interactive **Excel Application Dashboard** with native **"Apply Now"** buttons, persistent status/notes memory, and a full audit summary.
+
+Includes a dedicated, isolated pipeline for **IT Support, Helpdesk & ServiceNow** roles across multiple locations (Hyderabad & Bengaluru).
 
 ---
 
@@ -9,10 +11,12 @@ An automated job aggregation and tracking engine. It automatically discovers, va
 - [How to Share This Tool with Friends](#-how-to-share-this-tool-with-friends)
 - [Quick Start Guide (For You or a Friend)](#-quick-start-guide-for-you-or-a-friend)
 - [Customizing Your Search (`config.yaml`)](#-customizing-your-search-configyaml)
+- [Dedicated IT Support Pipeline (`run_it_support.bat`)](#-dedicated-it-support-pipeline)
 - [Scraping Modes & Credit Budgeting](#-scraping-modes--credit-budgeting)
-- [Understanding the Excel Tracker](#-understanding-the-excel-tracker)
+- [Understanding the Dual-Tab Excel Tracker](#-understanding-the-dual-tab-excel-tracker)
 - [Automating Daily Sweeps (Windows Task Scheduler)](#-automating-daily-sweeps-windows-task-scheduler)
 - [Architecture & File Reference](#-architecture--file-reference)
+- [Testing & Production Verification](#-testing--production-verification)
 - [Troubleshooting](#-troubleshooting)
 
 ---
@@ -24,31 +28,36 @@ flowchart TD
     A["User launches run.bat / Task Scheduler"] --> B{"Choose Mode<br/>(Frugal / Balanced / Exhaustive)"}
     B --> C["Local JobSpy Engine<br/>(LinkedIn, Indeed)"]
     B --> D["Firecrawl Search v2 Engine<br/>(Naukri & Direct Portals)"]
-    C --> E["URL Sanitizer & Deduplication"]
+    C --> E["URL Canonicalizer & Multi-Stage Deduplication"]
     D --> E
-    E --> F["Senior Title & Slug Gate<br/>(Rejects Sr / Lead / Manager)"]
-    F --> G["Experience Ceiling Gate<br/>(Rejects > 2 YOE)"]
+    E --> F["Senior Title & Slug Gate<br/>(Rejects Sr / Lead / Manager / Director)"]
+    F --> G["Experience Ceiling Gate<br/>(Rejects > 2 YOE via Range-Blanking)"]
     G --> H["Freshness Engine (seen_jobs.json)<br/>(Tags 🟢 NEW vs ⚪ SEEN)"]
-    H --> I["Excel Dashboard Generator<br/>(12 Columns, Dropdowns, Hyperlinks)"]
-    I --> J["Analytics Logger<br/>(run_log.csv)"]
+    H --> I["Excel Dashboard Generator<br/>(Tab 1: Leads, Tab 2: Funnel Audit)"]
+    I --> J["Dual Output & Persistent Memory<br/>(Tracker_Latest.xlsx + leads/ + applications.json)"]
+    J --> K["Analytics Logger<br/>(run_log.csv)"]
 ```
 
 1. **Dual Scraping Engines**:
-   - **JobSpy (Free, Local)**: Queries LinkedIn and Indeed directly.
+   - **JobSpy (Free, Local)**: Queries LinkedIn and Indeed directly with full description fetching for accurate skill matching.
    - **Firecrawl Search v2 (Cloud)**: Targets direct Naukri listing paths and corporate career boards with optional full markdown parsing.
 2. **Strict Quality Gating**:
    - Extracts real experience requirements from Naukri URL slugs (`-1-to-2-years-`) and description bodies.
    - Detects and drops senior listings (`Senior`, `Sr.`, `Lead`, `Manager`, `Architect`, `Principal`, `Director`).
+   - Uses range-blanking in `_within_ceiling()` so upper bounds of valid ranges are never mistaken for minimums, rejecting bypasses like *"Graduate with 5-8 years"*.
    - Discards any job requiring $> 2$ years minimum experience.
 3. **Freshness Tracking**:
-   - Remembers previously seen jobs in `seen_jobs.json`.
+   - Remembers previously seen jobs in `seen_jobs.json` with a 45-day rolling retention window.
    - New listings are highlighted as **`🟢 NEW`** (Bold Green).
    - Repeated listings from earlier runs are tagged as **`⚪ SEEN`** (Slate Gray).
-   - Automatically prunes entries older than 14 days to keep memory clean.
-4. **Interactive Excel Output**:
+   - Naukri listings older than 14 days decoded from URL slugs are automatically dropped.
+4. **Interactive Dual-Tab Excel Output & Persistent Memory**:
    - Clickable native **"Apply Now"** buttons jump straight to the application page.
    - Application Status dropdowns (`Not Applied`, `Applied`, `Interviewing`, `Offer Received`, etc.).
-   - Protected against file locks: if open in Excel, saves to `_Latest.xlsx` without crashing.
+   - **Persistent Memory**: Statuses and notes you enter in Excel are synchronized and preserved in `applications.json` across all future runs.
+   - **Dual Output**: Generates both a timestamped archive in `leads/` (e.g. `leads/Job_Leads_2026-10-14_0110.xlsx`) and the stable desktop anchor `Tracker_Latest.xlsx`.
+   - **Tab 2: Run Summary**: Full audit table displaying raw candidates, filter drops, and credit consumption.
+   - **Protected Against File Locks**: If open in Excel, saves safely to `_Latest.xlsx` without crashing.
 
 ---
 
@@ -57,23 +66,28 @@ flowchart TD
 When sharing this project folder with a friend, follow these privacy rules:
 
 ### ✅ Files to Send:
-- `config.yaml` (their configuration)
+- `config.yaml` (their Data Analyst search configuration)
+- `config_it_support.yaml` (their IT Support search configuration)
 - `requirements.txt` (dependencies)
 - `.env.example` (API key template)
 - `extractor.py` (skills extraction logic)
 - `scraper.py` (scraping engine)
 - `excel_generator.py` (Excel builder)
-- `main.py` (CLI orchestrator)
+- `main.py` (Data Analyst CLI orchestrator)
+- `main_it_support.py` (IT Support CLI orchestrator)
 - `run.bat` (1-click interactive runner)
+- `run_it_support.bat` (1-click IT Support runner)
 - `run_scheduled.bat` (headless scheduler runner)
+- `tests/` (unit and regression test suite)
 - `README.md` (this guide)
 - `.gitignore` (prevents accidental credential leaks)
 
 ### ⛔ NEVER Send These Files:
 - **`.env`** (⚠️ Contains your private API key! Never share this file).
-- `seen_jobs.json` (Contains your personal run history; let them generate their own fresh file).
-- `run_log.csv` (Your credit usage and run analytics).
-- `Job_Applications_Tracker.xlsx` (Your personal job leads).
+- `seen_jobs.json` / `seen_jobs_it_support.json` (Contains your personal run history).
+- `applications.json` / `applications_it_support.json` (Your personal application notes).
+- `run_log.csv` / `run_log_it_support.csv` (Your credit usage and run analytics).
+- `Tracker_Latest.xlsx` / `leads/` (Your personal job leads).
 - `__pycache__/` (Machine-specific compiled cache).
 
 ---
@@ -95,50 +109,46 @@ Ensure Python 3.10+ (tested and verified up to Python 3.13) is installed.
 > **Note**: If you don't provide an API key, the tool will gracefully skip Firecrawl and still scrape LinkedIn and Indeed for **100% free**!
 
 ### Step 3: Run the Tool!
-- **Windows**: Just double-click **`run.bat`**.
-  - It will automatically verify your Python environment, install any missing libraries from `requirements.txt`, display the mode selector, and begin scraping.
-- **Mac / Linux / Terminal**:
+- **Data Analyst Pipeline**: Just double-click **`run.bat`**.
+  - Automatically verifies dependencies, displays the scraping mode countdown, and generates `Tracker_Latest.xlsx`.
+- **IT Support Pipeline**: Just double-click **`run_it_support.bat`**.
+  - Runs the multi-location sweep (Hyderabad + Bengaluru) and generates `Tracker_Latest_IT_Support.xlsx`.
+- **Command Line**:
   ```bash
-  pip install -r requirements.txt
-  python main.py --mode balanced
+  py -m pip install -r requirements.txt
+  py main.py --mode balanced
   ```
 
 ---
 
 ## ⚙️ Customizing Your Search (`config.yaml`)
 
-Anyone can tailor the bot to their specific field, skills, or target city by opening [`config.yaml`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/config.yaml):
+Tailor the bot to your specific field, skills, or target city by editing [`config.yaml`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/config.yaml):
 
 ```yaml
 search:
-  # Target job designations
   job_titles:
     - "Data Analyst"
     - "Data Annotator"
     - "SQL Developer"
     - "Power BI Developer"
 
-  # Target city or region (e.g. "Hyderabad", "Bengaluru", "Pune", "Remote")
   location: "Hyderabad"
 
-  # Experience level filter & strict ceiling
   experience_filter: "0-2 years"
   max_experience_years: 2      # Strict ceiling: discard jobs requiring > 2 years
 
-  # Max age of postings in hours (24 for daily freshness, 72 for weekend sweeps)
-  hours_old: 72
+  # 24 hours for daily freshness, 72 hours for weekend catchup
+  hours_old: 24
 
-  # Target results per role from JobSpy
   results_wanted_per_role: 12
 
-  # Job boards to search
   platforms:
     - "linkedin"
     - "indeed"
 
   indeed_country: "india"
 
-# Skills you want highlighted in Excel
 skills_filter:
   target_skills:
     - "SQL"
@@ -149,6 +159,16 @@ skills_filter:
     - "Data Cleaning"
     - "ETL"
 ```
+
+---
+
+## 🖥️ Dedicated IT Support Pipeline
+
+For IT Support, Desktop Support, and ServiceNow roles:
+- **Runner**: Double-click [`run_it_support.bat`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/run_it_support.bat).
+- **Configuration**: Edit [`config_it_support.yaml`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/config_it_support.yaml).
+- **Multi-Location**: Natively queries both **Hyderabad** and **Bengaluru**.
+- **100% Isolated**: Uses its own `leads_it_support/` archive, `Tracker_Latest_IT_Support.xlsx`, `applications_it_support.json`, and `seen_jobs_it_support.json`. It will never touch or pollute your primary Data Analyst tracking database.
 
 ---
 
@@ -168,18 +188,20 @@ Auto-selecting [1] in 5 seconds...
 
 | Mode | Firecrawl Depth | Cost per Run (4 roles) | Ideal Usage |
 | :--- | :--- | :--- | :--- |
-| **Frugal** | Fast SERP snippet search (no page scrape) | **8 credits** | Daily background sweeps via Task Scheduler (~240 credits/month). |
+| **Frugal** | Fast SERP snippet search (no page scrape) | **8 credits** (or 2 credits for 1 role) | Daily background sweeps via Task Scheduler (~240 credits/month). |
 | **Balanced** | Full Markdown scrape on top 4 listings/role | **~24 credits** | Active application days where you want deep skill extraction. |
-| **Exhaustive**| Full Markdown scrape on top 10 listings/role| **~48 credits** | Weekly Monday morning sweeps to capture the entire market. |
-
-*Firecrawl Billing Formula (Empirically Verified):*
-$$\text{Cost} = \left(\lceil \text{results} / 10 \rceil \times 2\text{ search credits}\right) + (1\text{ credit per scraped markdown page})$$
+| **Exhaustive**| Full Markdown scrape on top 10 listings/role| **~48 credits** | Weekly Monday sweeps to capture the entire market. |
 
 ---
 
-## 📊 Understanding the Excel Tracker
+## 📊 Understanding the Dual-Tab Excel Tracker
 
-The generated spreadsheet [`Job_Applications_Tracker.xlsx`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/Job_Applications_Tracker.xlsx) contains 12 structured columns:
+Every run generates both:
+1. **Timestamped Archive**: `leads/Job_Leads_YYYY-MM-DD_HHMM.xlsx`
+2. **Stable Desktop Anchor**: `Tracker_Latest.xlsx`
+
+### Tab 1: Active Job Leads
+Contains 12 structured, interactive columns:
 
 | Col # | Column Name | Format / Behavior |
 | :---: | :--- | :--- |
@@ -193,8 +215,17 @@ The generated spreadsheet [`Job_Applications_Tracker.xlsx`](file:///d:/ANTIGRAVI
 | **H** | `Location / Mode` | Work model (`Hybrid`, `On-site`, `Remote`). |
 | **I** | `Platform` | Source platform (`Naukri`, `LinkedIn`, `Indeed`, etc.). |
 | **J** | `Apply Action` | **Clickable blue button** linking directly to the job post. |
-| **K** | `Application Status` | **Interactive Dropdown**: `Not Applied`, `Applied`, `Interviewing`, `Rejected`, `Offer Received`. |
-| **L** | `Referral / Notes` | Free-text space for tracking referrals, HR contacts, or follow-ups. |
+| **K** | `Application Status` | **Interactive Dropdown**: `Not Applied`, `Applied`, `Interviewing`, `Rejected`, `Offer Received`. Preserved across runs! |
+| **L** | `Referral / Notes` | Free-text space for tracking referrals, HR contacts, or follow-ups. Preserved across runs! |
+
+### Tab 2: Run Summary
+An audit sheet tracking funnel metrics for transparency:
+- **Run Timestamp & Mode**
+- **Total Raw Candidates Gathered** (Firecrawl + JobSpy)
+- **Senior Roles Filtered**
+- **Experience Ceiling Filtered (> 2 YOE)**
+- **Final Verified Leads Retained**
+- **Firecrawl Credits Consumed**
 
 ---
 
@@ -209,7 +240,7 @@ You can have Windows automatically run a silent Frugal scan every morning at 8:0
    ```
 *(Replace `d:\ANTIGRAVITY WORKSPACE\job_automation` with your friend's actual folder path if running on their machine).*
 
-- Uses [`run_scheduled.bat`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/run_scheduled.bat), which runs without hanging on user input and redirects all console output into `scheduled_run.log`.
+- Uses [`run_scheduled.bat`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/run_scheduled.bat), which includes automatic 5 MB log rotation, timestamp logging, and unbuffered execution.
 - Runs in **Frugal mode** (costs only 8 credits/day = ~240/month, safely inside the 1,000 free monthly tier).
 
 ---
@@ -219,20 +250,40 @@ You can have Windows automatically run a silent Frugal scan every morning at 8:0
 ```text
 job_automation/
 ├── config.yaml               # User search configuration, skills, and mode parameters
-├── requirements.txt          # Python dependencies (Python 3.10 - 3.13 pre-built wheels)
+├── config_it_support.yaml    # IT Support / ServiceNow configuration (Hyderabad & Bengaluru)
+├── requirements.txt          # Pinned Python dependencies
 ├── .env.example              # Template for API keys
 ├── .env                      # [PRIVATE] Live Firecrawl API key
 ├── .gitignore                # Protects credentials, logs, and personal outputs
 ├── extractor.py              # Skill keyword matcher & experience/work-mode parser
 ├── scraper.py                # Dual engine orchestrator, ceiling filter, senior filter & seen ledger
-├── excel_generator.py        # 12-column openpyxl builder with dropdowns, styles & hyperlinks
-├── main.py                   # CLI entrypoint, credit delta checks & CSV migration logger
-├── run.bat                   # 1-Click interactive launcher with 5-second mode countdown
-├── run_scheduled.bat         # Headless unattended runner for Windows Task Scheduler
-├── seen_jobs.json            # Persistent URL ledger with 14-day rolling pruning
-├── run_log.csv               # Historical telemetry: timestamp, mode, credits, candidates, hits
-├── scheduled_run.log         # Unattended Task Scheduler crash forensics & run log
-└── Job_Applications_Tracker.xlsx # Master Excel output sheet
+├── excel_generator.py        # 12-column openpyxl builder with dropdowns, dual output & Tab 2 audit
+├── main.py                   # Data Analyst CLI entrypoint, credit delta checks & CSV migration logger
+├── main_it_support.py        # Dedicated multi-location IT Support runner
+├── run.bat                   # 1-Click interactive Data Analyst launcher with countdown
+├── run_it_support.bat        # 1-Click interactive IT Support launcher
+├── run_scheduled.bat         # Headless unattended runner with 5MB log rotation
+├── Tracker_Latest.xlsx       # Stable desktop anchor for daily tracking
+├── leads/                    # Timestamped historical archive folder (auto-generated)
+├── seen_jobs.json            # Persistent URL ledger with 45-day rolling pruning
+├── applications.json         # Persistent application status & notes ledger
+├── run_log.csv               # Historical telemetry: timestamp, mode, credits, candidates, drops
+└── tests/                    # Unit and regression test suite (30 passing tests)
+    ├── test_phase2.py
+    ├── test_refinements.py
+    ├── test_experience_order.py
+    └── test_nan_url.py
+```
+
+---
+
+## 🧪 Testing & Production Verification
+
+The entire codebase is verified by 30 automated unit and acceptance tests covering URL validation, date bounds, ceiling range-blanking, atomic persistence, formula injection protection, and multi-file sync precedence.
+
+To run the complete test suite:
+```powershell
+py -m unittest discover tests -v
 ```
 
 ---
@@ -240,8 +291,8 @@ job_automation/
 ## 🛠️ Troubleshooting
 
 ### 1. "PermissionError: [Errno 13] Permission denied"
-- **Cause**: `Job_Applications_Tracker.xlsx` is currently open in Microsoft Excel while the script is running.
-- **Solution**: The engine automatically catches this and saves to `Job_Applications_Tracker_Latest.xlsx` instead of crashing. Simply close Excel and run again.
+- **Cause**: An Excel file is currently open in Microsoft Excel while the script is running.
+- **Solution**: The engine automatically catches this and saves a clean copy to `_Latest.xlsx` without crashing. Simply close Excel and your edits will sync on the next run.
 
 ### 2. Missing Dependencies
 - Run:
