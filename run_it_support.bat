@@ -16,9 +16,8 @@ if errorlevel 1 (
     echo Installing or updating required packages...
     py -m pip install -r requirements.txt --quiet --disable-pip-version-check
     if errorlevel 1 (
-        echo [!] Error: Failed to install required Python packages.
-        pause
-        exit /b 1
+        py -m pip install numpy pandas openpyxl pyyaml requests beautifulsoup4 tls-client markdownify pydantic python-dotenv --quiet --disable-pip-version-check
+        py -m pip install python-jobspy==1.1.82 --no-deps --quiet --disable-pip-version-check
     )
 ) else (
     echo Python environment verified.

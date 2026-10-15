@@ -472,6 +472,112 @@ class TestPhase2Acceptance(unittest.TestCase):
         finally:
             wb.close()
 
+    def test_degree_and_contract_durations_do_not_drop_freshers(self):
+        """Test 11: '4 year degree' and '36 months contract' do not trigger >2 YOE ceiling drops."""
+        scraper_config = {
+            "search": {"max_experience_years": 2},
+            "skills_filter": {"target_skills": ["SQL", "Excel"]},
+            "output": {"seen_jobs_file": self.seen_jobs_file}
+        }
+        scraper = MultiPlatformJobScraper(scraper_config)
+        df = pd.DataFrame([
+            {
+                "company": "Acme Corp",
+                "title": "Junior Data Analyst",
+                "location": "Hyderabad",
+                "site": "LinkedIn",
+                "job_url": "https://www.linkedin.com/jobs/view/9001",
+                "job_url_direct": "https://www.linkedin.com/jobs/view/9001",
+                "description": "Requires a 4 year Bachelor's degree in Computer Science. 36 months contract. Freshers welcome.",
+                "date_posted": "Recent",
+                "search_query": "Data Analyst"
+            }
+        ])
+        enriched = scraper._enrich_jobs(df)
+        self.assertEqual(len(enriched), 1)
+        self.assertEqual(scraper.last_run_stats["dropped_experience_ceiling"], 0)
+
+    def test_excel_verb_not_extracted_as_skill(self):
+        """Test 12: 'excel in' as a verb is ignored while 'Excel' as a tool is extracted."""
+        scraper_config = {
+            "search": {"max_experience_years": 2},
+            "skills_filter": {"target_skills": ["SQL", "Excel"]},
+            "output": {"seen_jobs_file": self.seen_jobs_file}
+        }
+        scraper = MultiPlatformJobScraper(scraper_config)
+        skills_verb = scraper.extractor.extract_skills("You will excel in a fast-paced environment and excel at teamwork.")
+        self.assertNotIn("Excel", skills_verb)
+
+        skills_tool = scraper.extractor.extract_skills("Proficient in MS Excel, SQL, and dashboarding.")
+        self.assertIn("Excel", skills_tool)
+
+    def test_leadsquared_and_principal_companies_not_dropped_as_senior(self):
+        """Test 13: Companies like LeadSquared or Principal Global in URL slugs are not dropped as senior."""
+        scraper_config = {
+            "search": {"max_experience_years": 2},
+            "skills_filter": {"target_skills": ["SQL"]},
+            "output": {"seen_jobs_file": self.seen_jobs_file}
+        }
+        scraper = MultiPlatformJobScraper(scraper_config)
+        self.assertFalse(scraper._is_senior_title(
+            "Data Analyst",
+            "https://www.naukri.com/job-listings-data-analyst-leadsquared-hyderabad-0-to-2-years-121026001234",
+            company="LeadSquared"
+        ))
+        self.assertFalse(scraper._is_senior_title(
+            "Associate Analyst - Lead Generation",
+            "https://www.linkedin.com/jobs/view/9002",
+            company="Infosys"
+        ))
+
+    def test_touching_old_archive_mtime_does_not_revert_status(self):
+        """Test 14: Opening an old file in leads/ and touching its mtime never overwrites Tracker_Latest.xlsx."""
+        lead_archive = os.path.join(self.leads_dir, "Job_Leads_2026-10-08_0900.xlsx")
+        target_url = "https://www.linkedin.com/jobs/view/88888"
+
+        self._create_sample_workbook(lead_archive, [
+            {"company": "Stripe", "title": "Data Analyst", "apply_url": target_url, "status": "Not Applied", "notes": ""}
+        ])
+        self._create_sample_workbook(self.stable_file, [
+            {"company": "Stripe", "title": "Data Analyst", "apply_url": target_url, "status": "Interviewing", "notes": "HM round"}
+        ])
+
+        # Simulate user opening the old archive in Excel LATER, making its mtime newer than Tracker_Latest.xlsx
+        future_time = time.time() + 300
+        os.utime(lead_archive, (future_time, future_time))
+
+        generator = ExcelDashboardGenerator(self.config)
+        self.assertEqual(generator.applications_ledger[canonicalize_job_url(target_url)]["status"], "Interviewing")
+
+    def test_applied_and_in_progress_tab_persists_across_days(self):
+        """Test 15: Jobs marked 'Applied' appear in the 'Applied & In Progress' tab even when absent from today's scrape."""
+        file_a = os.path.join(self.leads_dir, "Job_Leads_2026-10-08_0900.xlsx")
+        applied_url = "https://www.linkedin.com/jobs/view/777111"
+        self._create_sample_workbook(file_a, [
+            {"company": "Atlassian", "title": "Junior BI Analyst", "apply_url": applied_url, "status": "Applied", "notes": "Referral"}
+        ])
+
+        generator = ExcelDashboardGenerator(self.config)
+        # Tomorrow's scrape only has a completely different job
+        tomorrow_df = pd.DataFrame([
+            {
+                "lead_status": "🟢 NEW", "formatted_date": "Today", "company": "Oracle",
+                "title": "SQL Developer", "extracted_skills": "SQL", "extracted_experience": "0 - 2 Years",
+                "location": "Hyderabad", "site": "LinkedIn", "final_apply_url": "https://www.linkedin.com/jobs/view/888222"
+            }
+        ])
+        out_path = generator.generate(tomorrow_df)
+        wb = openpyxl.load_workbook(out_path)
+        try:
+            self.assertIn("Applied & In Progress", wb.sheetnames)
+            ws_app = wb["Applied & In Progress"]
+            self.assertEqual(ws_app.cell(2, 2).value, "Atlassian")
+            self.assertEqual(ws_app.cell(2, 3).value, "Junior BI Analyst")
+            self.assertEqual(ws_app.cell(2, 7).value, "Applied")
+            self.assertEqual(ws_app.cell(2, 8).value, "Referral")
+        finally:
+            wb.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -775,10 +775,17 @@ class MultiPlatformJobScraper:
         re.IGNORECASE
     )
 
-    def _is_senior_title(self, title: str, url: str = "") -> bool:
+    NON_SENIOR_FALSE_POSITIVES_RE = re.compile(
+        r'\b(?:lead\s+generation|lead\s+gen|leadsquared|lead\s+squared|'
+        r'principal\s+global|principal\s+financial|head\s+digital|headout|headspin|headspace)\b',
+        re.IGNORECASE
+    )
+
+    def _is_senior_title(self, title: str, url: str = "", company: str = "") -> bool:
         """
         Detects senior, lead, or management postings in the job title or URL path slug.
-        Excludes URL hostname and query parameters to prevent false positives (e.g. ?utm_source=lead_form).
+        Excludes URL hostname, query parameters, non-seniority phrases ('lead generation'),
+        and company names embedded in Naukri URL slugs (e.g. 'LeadSquared', 'Principal Global').
         """
         url_path = ""
         if url and isinstance(url, str):
@@ -786,8 +793,19 @@ class MultiPlatformJobScraper:
                 url_path = urlsplit(url.strip()).path
             except Exception:
                 url_path = url
-        text = f"{title or ''} {url_path}".replace("-", " ").replace("_", " ").replace("/", " ").lower()
-        return bool(self.SENIOR_TITLE_PATTERN.search(text))
+
+        clean_title = (title or "").replace("-", " ").replace("_", " ").lower()
+        clean_path = url_path.replace("-", " ").replace("_", " ").replace("/", " ").lower()
+
+        # Strip extracted company name from the URL path slug so company words don't trigger senior drops
+        if company and isinstance(company, str):
+            co_norm = company.replace("-", " ").replace("_", " ").strip().lower()
+            if len(co_norm) >= 3:
+                clean_path = clean_path.replace(co_norm, " ")
+
+        combined = f"{clean_title} {clean_path}"
+        combined = self.NON_SENIOR_FALSE_POSITIVES_RE.sub(" ", combined)
+        return bool(self.SENIOR_TITLE_PATTERN.search(combined))
 
     def _resolve_row_canonical_url(self, row: Any) -> str:
         """Resolves and canonicalizes the best direct URL for a DataFrame row."""
@@ -854,7 +872,6 @@ class MultiPlatformJobScraper:
                 seen_triplets[triplet] = host
             else:
                 first_host = seen_triplets[triplet]
-                # Drop if missing canonical URL or if coming from a different board/host for the same role
                 if not canon_u or not first_host or host != first_host:
                     drop_stage2.append(idx)
 
@@ -914,7 +931,11 @@ class MultiPlatformJobScraper:
                     date_status = "unparseable"
 
             # Amendment 1 Gate: Drop senior/lead/management roles before slug/ceiling checks
-            if self.max_experience_years <= 2 and self._is_senior_title(str(job_dict.get("title", "")), final_url_str):
+            if self.max_experience_years <= 2 and self._is_senior_title(
+                str(job_dict.get("title", "")),
+                final_url_str,
+                company=str(job_dict.get("company", ""))
+            ):
                 self.last_run_stats["dropped_senior_title"] += 1
                 continue
 

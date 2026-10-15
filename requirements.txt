@@ -1,11 +1,12 @@
-# Python 3.13 Compatible Pinned Dependencies
-numpy==2.5.2
-pandas==3.0.5
-openpyxl==3.1.5
-pyyaml==6.0.3
-requests==2.34.2
-beautifulsoup4==4.15.0
-tls-client==1.0.1
-markdownify==1.2.3
+# Cross-Version Python 3.10 - 3.13 Compatible Dependencies
+numpy>=1.26.3
+pandas>=2.1.0
+openpyxl>=3.1.2
+pyyaml>=6.0.1
+requests>=2.31.0
+beautifulsoup4>=4.12.2
+tls-client>=1.0.1
+markdownify>=0.13.1
+pydantic>=2.5.0
+python-dotenv>=1.0.0
 python-jobspy==1.1.82
-python-dotenv==1.2.3

@@ -128,7 +128,7 @@ Ensure Python 3.10+ (tested and verified up to Python 3.13) is installed.
 
 ## ⚙️ Customizing Your Search (`config.yaml`)
 
-Tailor the bot to your specific field, skills, or target city by editing [`config.yaml`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/config.yaml):
+Tailor the bot to your specific field, skills, or target city by editing [`config.yaml`](config.yaml):
 
 ```yaml
 search:
@@ -170,8 +170,8 @@ skills_filter:
 ## 🖥️ Dedicated IT Support Pipeline
 
 For IT Support, Desktop Support, and ServiceNow roles:
-- **Runner**: Double-click [`run_it_support.bat`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/run_it_support.bat).
-- **Configuration**: Edit [`config_it_support.yaml`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/config_it_support.yaml).
+- **Runner**: Double-click [`run_it_support.bat`](run_it_support.bat).
+- **Configuration**: Edit [`config_it_support.yaml`](config_it_support.yaml).
 - **Multi-Location**: Natively queries both **Hyderabad** and **Bengaluru**.
 - **100% Isolated**: Uses its own `leads_it_support/` archive, `Tracker_Latest_IT_Support.xlsx`, `applications_it_support.json`, and `seen_jobs_it_support.json`. It will never touch or pollute your primary Data Analyst tracking database.
 
@@ -179,7 +179,7 @@ For IT Support, Desktop Support, and ServiceNow roles:
 
 ## 💳 Scraping Modes & Credit Budgeting
 
-When launching [`run.bat`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/run.bat), an interactive menu prompts for intensity:
+When launching [`run.bat`](run.bat), an interactive menu prompts for intensity:
 
 ```text
 =====================================================================
@@ -199,7 +199,7 @@ Auto-selecting [1] in 5 seconds...
 
 ---
 
-## 📊 Understanding the Dual-Tab Excel Tracker
+## 📊 Understanding the Triple-Tab Excel Tracker
 
 Every run generates both:
 1. **Timestamped Archive**: `leads/Job_Leads_YYYY-MM-DD_HHMM.xlsx`
@@ -223,7 +223,13 @@ Contains 12 structured, interactive columns:
 | **K** | `Application Status` | **Interactive Dropdown**: `Not Applied`, `Applied`, `Interviewing`, `Rejected`, `Offer Received`. Preserved across runs! |
 | **L** | `Referral / Notes` | Free-text space for tracking referrals, HR contacts, or follow-ups. Preserved across runs! |
 
-### Tab 2: Run Summary
+### Tab 2: Applied & In Progress (Permanent Kanban View)
+A dedicated view displaying every job you have marked as `Applied`, `Interviewing`, etc., or added notes to.
+- Never disappears when tomorrow's fresh scrape runs.
+- Includes **Sl. No**, **Company Name**, **Job Title**, **Location**, **Platform**, **View Job link**, **Application Status**, **Notes**, and **Last Updated**.
+- Edits made on this sheet automatically sync back to `applications.json`!
+
+### Tab 3: Run Summary
 An audit sheet tracking funnel metrics for transparency:
 - **Run Timestamp & Mode**
 - **Total Raw Candidates Gathered** (Firecrawl + JobSpy)
@@ -245,7 +251,7 @@ You can have Windows automatically run a silent Frugal scan every morning at 8:0
    ```
 *(Replace `d:\ANTIGRAVITY WORKSPACE\job_automation` with your friend's actual folder path if running on their machine).*
 
-- Uses [`run_scheduled.bat`](file:///d:/ANTIGRAVITY%20WORKSPACE/job_automation/run_scheduled.bat), which includes automatic 5 MB log rotation, timestamp logging, and unbuffered execution.
+- Uses [`run_scheduled.bat`](run_scheduled.bat), which includes automatic 5 MB log rotation, timestamp logging, and unbuffered execution.
 - Runs in **Frugal mode** (costs only 8 credits/day = ~240/month, safely inside the 1,000 free monthly tier).
 
 ---
@@ -262,7 +268,7 @@ job_automation/
 ├── .gitignore                # Protects credentials, logs, and personal outputs
 ├── extractor.py              # Skill keyword matcher & experience/work-mode parser
 ├── scraper.py                # Dual engine orchestrator, ceiling filter, senior filter & seen ledger
-├── excel_generator.py        # 12-column openpyxl builder with dropdowns, dual output & Tab 2 audit
+├── excel_generator.py        # 12-column openpyxl builder with dropdowns, dual output, Tab 2 Kanban & Tab 3 audit
 ├── main.py                   # Data Analyst CLI entrypoint, credit delta checks & CSV migration logger
 ├── main_it_support.py        # Dedicated multi-location IT Support runner
 ├── run.bat                   # 1-Click interactive Data Analyst launcher with countdown
@@ -273,7 +279,7 @@ job_automation/
 ├── seen_jobs.json            # Persistent URL ledger with 45-day rolling pruning
 ├── applications.json         # Persistent application status & notes ledger
 ├── run_log.csv               # Historical telemetry: timestamp, mode, credits, candidates, drops
-└── tests/                    # Unit and regression test suite (30 passing tests)
+└── tests/                    # Unit and regression test suite (35 passing tests)
     ├── test_phase2.py
     ├── test_refinements.py
     ├── test_experience_order.py
@@ -284,7 +290,7 @@ job_automation/
 
 ## 🧪 Testing & Production Verification
 
-The entire codebase is verified by 30 automated unit and acceptance tests covering URL validation, date bounds, ceiling range-blanking, atomic persistence, formula injection protection, and multi-file sync precedence.
+The entire codebase is verified by 35 automated unit and acceptance tests covering URL validation, date bounds, ceiling range-blanking, atomic persistence, formula injection protection, Kanban memory persistence, and multi-file sync precedence.
 
 To run the complete test suite:
 ```powershell
