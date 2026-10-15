@@ -170,8 +170,20 @@ class ExcelDashboardGenerator:
 
         return archive_candidates + primary_candidates
 
-    def _sync_sheet_into_ledger(self, ws, ledger: Dict[str, Dict[str, str]], allow_revert: bool) -> int:
+    def _sync_sheet_into_ledger(
+        self,
+        ws,
+        ledger: Dict[str, Dict[str, str]],
+        allow_revert: bool = False,
+        baseline: Optional[Dict[str, Dict[str, str]]] = None,
+        initial_ledger_keys: Optional[set] = None
+    ) -> int:
         """Extracts status, notes, and job metadata from a worksheet into ledger."""
+        if baseline is None:
+            baseline = {}
+        if initial_ledger_keys is None:
+            initial_ledger_keys = set()
+
         headers = [str(cell.value or "").strip() for cell in ws[1]]
         header_indices = {}
         for idx, h in enumerate(headers, 1):
@@ -245,6 +257,20 @@ class ExcelDashboardGenerator:
             if not key:
                 continue
 
+            # Fix N2: Old archives in leads/ cannot resurrect or modify keys already in applications.json
+            if not allow_revert and key in initial_ledger_keys:
+                continue
+
+            eff_status = status_val if (status_val and status_val != "None") else "Not Applied"
+            eff_notes = notes_val or ""
+
+            # Fix N1: If cell matches pre-sync baseline, skip so unchanged tabs don't stomp active edits
+            if key in baseline:
+                base_status = baseline[key].get("status", "Not Applied")
+                base_notes = baseline[key].get("notes", "")
+                if eff_status == base_status and eff_notes == base_notes:
+                    continue
+
             is_default_empty = (status_val in ["", "Not Applied", "None"]) and not notes_val
             if is_default_empty:
                 if allow_revert and key in ledger:
@@ -297,6 +323,7 @@ class ExcelDashboardGenerator:
             except Exception as e:
                 print(f"[!] Warning: Could not read '{self.applications_file}': {e}")
 
+        initial_ledger_keys = set(ledger.keys())
         candidate_files = self._get_ordered_sync_candidates()
         total_updates = 0
 
@@ -313,8 +340,16 @@ class ExcelDashboardGenerator:
                 if self.APPLIED_TAB_NAME in wb.sheetnames:
                     sheets_to_read.append(wb[self.APPLIED_TAB_NAME])
 
+                baseline = {k: dict(v) for k, v in ledger.items()}
+
                 for ws in sheets_to_read:
-                    total_updates += self._sync_sheet_into_ledger(ws, ledger, allow_revert=is_primary)
+                    total_updates += self._sync_sheet_into_ledger(
+                        ws,
+                        ledger,
+                        allow_revert=is_primary,
+                        baseline=baseline,
+                        initial_ledger_keys=initial_ledger_keys
+                    )
 
             except PermissionError:
                 print(f"[!] Warning: Tracker file '{target_file}' is currently locked in Excel.")

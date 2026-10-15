@@ -143,7 +143,6 @@ class ITSupportScraper(MultiPlatformJobScraper):
             self.last_run_stats["jobspy_retained"] = int((enriched_df["_source_engine"] == "jobspy").sum())
             enriched_df.drop(columns=["_source_engine"], inplace=True)
 
-        self._save_seen_jobs()
         return enriched_df
 
 
@@ -235,6 +234,9 @@ def main():
         sys.exit(0)
 
     generated_file = dashboard_gen.generate(enriched_jobs_df, output_path=output_filename, run_stats=row_data)
+
+    # Commit seen jobs ledger only after Excel write succeeds
+    scraper._save_seen_jobs()
 
     print("\n" + "=" * 70)
     print(f"[+] SUCCESS! Total Active Opportunities Aggregated: {total_unique}")

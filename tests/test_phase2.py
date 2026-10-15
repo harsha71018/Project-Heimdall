@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from excel_generator import ExcelDashboardGenerator, canonicalize_job_url
 from scraper import MultiPlatformJobScraper
+from extractor import JobRequirementExtractor
 
 
 class TestPhase2Acceptance(unittest.TestCase):
@@ -83,6 +84,61 @@ class TestPhase2Acceptance(unittest.TestCase):
 
                 ws.cell(row=row_idx, column=11, value=job.get("status", "Not Applied"))
                 ws.cell(row=row_idx, column=12, value=job.get("notes", ""))
+
+            wb.save(filepath)
+        finally:
+            wb.close()
+
+    def _create_multi_tab_workbook(self, filepath, tab1_jobs, tab2_jobs):
+        """Helper to create a formatted workbook with both 'Active Job Leads' and 'Applied & In Progress' tabs."""
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        wb = openpyxl.Workbook()
+        try:
+            ws1 = wb.active
+            ws1.title = "Active Job Leads"
+            headers1 = [
+                "Sl. No", "Lead Status", "Date Posted", "Company Name",
+                "Job Title / Role", "Main Skills Required", "Experience Level",
+                "Location / Mode", "Platform", "Apply Action",
+                "Application Status", "Referral / Notes"
+            ]
+            ws1.append(headers1)
+            for idx, job in enumerate(tab1_jobs, 1):
+                r = ws1.max_row + 1
+                ws1.cell(row=r, column=1, value=idx)
+                ws1.cell(row=r, column=2, value=job.get("lead_status", "🟢 NEW"))
+                ws1.cell(row=r, column=3, value=job.get("date_posted", "2026-10-08"))
+                ws1.cell(row=r, column=4, value=job.get("company", "Company A"))
+                ws1.cell(row=r, column=5, value=job.get("title", "Data Analyst"))
+                ws1.cell(row=r, column=6, value=job.get("skills", "Python, SQL"))
+                ws1.cell(row=r, column=7, value=job.get("experience", "0 - 2 Years"))
+                ws1.cell(row=r, column=8, value=job.get("location", "Hyderabad"))
+                ws1.cell(row=r, column=9, value=job.get("platform", "LinkedIn"))
+                c_apply = ws1.cell(row=r, column=10, value="Apply Now")
+                if job.get("apply_url"):
+                    c_apply.hyperlink = job["apply_url"]
+                ws1.cell(row=r, column=11, value=job.get("status", "Not Applied"))
+                ws1.cell(row=r, column=12, value=job.get("notes", ""))
+
+            ws2 = wb.create_sheet(title="Applied & In Progress")
+            headers2 = [
+                "Sl. No", "Company Name", "Job Title / Role", "Location / Mode",
+                "Platform", "Apply Action", "Application Status", "Referral / Notes", "Last Updated"
+            ]
+            ws2.append(headers2)
+            for idx, job in enumerate(tab2_jobs, 1):
+                r = ws2.max_row + 1
+                ws2.cell(row=r, column=1, value=idx)
+                ws2.cell(row=r, column=2, value=job.get("company", "Company A"))
+                ws2.cell(row=r, column=3, value=job.get("title", "Data Analyst"))
+                ws2.cell(row=r, column=4, value=job.get("location", "Hyderabad"))
+                ws2.cell(row=r, column=5, value=job.get("platform", "LinkedIn"))
+                c_apply2 = ws2.cell(row=r, column=6, value="View / Apply")
+                if job.get("apply_url"):
+                    c_apply2.hyperlink = job["apply_url"]
+                ws2.cell(row=r, column=7, value=job.get("status", "Applied"))
+                ws2.cell(row=r, column=8, value=job.get("notes", ""))
+                ws2.cell(row=r, column=9, value="2026-10-08")
 
             wb.save(filepath)
         finally:
@@ -577,6 +633,132 @@ class TestPhase2Acceptance(unittest.TestCase):
             self.assertEqual(ws_app.cell(2, 8).value, "Referral")
         finally:
             wb.close()
+
+    def test_multi_tab_sync_conflict_active_tab_wins(self):
+        """Test 16: Editing a status in Tab 1 wins over stale unedited row in Tab 2."""
+        target_url = "https://www.linkedin.com/jobs/view/11111"
+        target_url2 = "https://www.linkedin.com/jobs/view/22222"
+        norm1 = canonicalize_job_url(target_url)
+        norm2 = canonicalize_job_url(target_url2)
+
+        # Baseline in applications.json
+        initial_ledger = {
+            norm1: {
+                "status": "Applied",
+                "notes": "Initial application",
+                "company": "Comp A",
+                "title": "Role A",
+                "url": target_url
+            },
+            norm2: {
+                "status": "Applied",
+                "notes": "Sent resume",
+                "company": "Comp B",
+                "title": "Role B",
+                "url": target_url2
+            }
+        }
+        with open(self.applications_file, "w", encoding="utf-8") as f:
+            json.dump(initial_ledger, f)
+
+        # In Tracker_Latest.xlsx:
+        # Job 1 is edited in Tab 1 to "Interviewing" ("Round 1 passed"), but Tab 2 still has stale "Applied" ("Initial application")
+        # Job 2 is edited in Tab 2 to "Offer Received" ("Package accepted"), but Tab 1 still has "Applied" ("Sent resume")
+        tab1_jobs = [
+            {"company": "Comp A", "title": "Role A", "apply_url": target_url, "status": "Interviewing", "notes": "Round 1 passed"},
+            {"company": "Comp B", "title": "Role B", "apply_url": target_url2, "status": "Applied", "notes": "Sent resume"}
+        ]
+        tab2_jobs = [
+            {"company": "Comp A", "title": "Role A", "apply_url": target_url, "status": "Applied", "notes": "Initial application"},
+            {"company": "Comp B", "title": "Role B", "apply_url": target_url2, "status": "Offer Received", "notes": "Package accepted"}
+        ]
+        self._create_multi_tab_workbook(self.stable_file, tab1_jobs, tab2_jobs)
+
+        generator = ExcelDashboardGenerator(self.config)
+        # Tab 1 edit won over stale Tab 2
+        self.assertEqual(generator.applications_ledger[norm1]["status"], "Interviewing")
+        self.assertEqual(generator.applications_ledger[norm1]["notes"], "Round 1 passed")
+        # Tab 2 edit won over stale Tab 1
+        self.assertEqual(generator.applications_ledger[norm2]["status"], "Offer Received")
+        self.assertEqual(generator.applications_ledger[norm2]["notes"], "Package accepted")
+
+    def test_archive_resurrection_prevented_by_initial_ledger_keys(self):
+        """Test 17: Reverting status to 'Not Applied' in applications.json is never resurrected by old leads/ archive."""
+        target_url = "https://www.linkedin.com/jobs/view/33333"
+        norm = canonicalize_job_url(target_url)
+
+        # User previously reverted this job to 'Not Applied' in applications.json
+        with open(self.applications_file, "w", encoding="utf-8") as f:
+            json.dump({
+                norm: {
+                    "status": "Not Applied",
+                    "notes": "",
+                    "company": "Comp C",
+                    "title": "Role C",
+                    "url": target_url
+                }
+            }, f)
+
+        # An older archive exists in leads/ where this job had been marked 'Applied'
+        archive_file = os.path.join(self.leads_dir, "Job_Leads_2026-10-08_0900.xlsx")
+        self._create_sample_workbook(archive_file, [
+            {"company": "Comp C", "title": "Role C", "apply_url": target_url, "status": "Applied", "notes": "Old applied note"}
+        ])
+
+        generator = ExcelDashboardGenerator(self.config)
+        # Verify old archive did NOT resurrect status back to 'Applied'
+        self.assertEqual(generator.applications_ledger[norm]["status"], "Not Applied")
+        self.assertEqual(generator.applications_ledger[norm]["notes"], "")
+
+    def test_naukri_slug_company_extraction_preserves_lead(self):
+        """Test 18: Naukri slug company extraction preserves 'Lead' in company names."""
+        scraper = MultiPlatformJobScraper(self.config)
+        url = "https://www.naukri.com/job-listings-data-analyst-lead-squared-hyderabad-0-to-2-years-121026001234"
+        role, company = scraper._extract_clean_metadata("Data Analyst - Lead Squared", url, "Naukri")
+        self.assertEqual(company, "Lead Squared")
+
+        url2 = "https://www.naukri.com/job-listings-sql-developer-lead-edge-solutions-bangalore-121026001235"
+        role2, company2 = scraper._extract_clean_metadata("SQL Developer - Lead Edge Solutions", url2, "Naukri")
+        self.assertEqual(company2, "Lead Edge Solutions")
+
+    def test_senior_title_filter_drops_principal_and_head(self):
+        """Test 19: Title-only senior gate properly drops Principal and Head roles while preserving lead gen."""
+        scraper = MultiPlatformJobScraper(self.config)
+        self.assertTrue(scraper._is_senior_title("Principal Financial Analyst"))
+        self.assertTrue(scraper._is_senior_title("Head - Digital Marketing"))
+        self.assertTrue(scraper._is_senior_title("Senior Business Analyst"))
+        self.assertTrue(scraper._is_senior_title("Lead Systems Engineer"))
+        self.assertFalse(scraper._is_senior_title("Lead Generation Executive"))
+        self.assertFalse(scraper._is_senior_title("Associate Data Analyst", url="https://naukri.com/leadsquared", company="LeadSquared"))
+
+    def test_excel_skill_extractor_handles_capitalization_and_prepositions(self):
+        """Test 20: Excel tool is extracted even when followed by prepositions if capitalized, verb ignored."""
+        extractor = JobRequirementExtractor(["Excel", "SQL"])
+        # Verbs to ignore
+        self.assertNotIn("Excel", extractor.extract_skills("Candidates will excel in fast-paced collaborative environments."))
+        self.assertNotIn("Excel", extractor.extract_skills("You must excel at problem solving."))
+        self.assertNotIn("Excel", extractor.extract_skills("Ability to excel within a team."))
+        # Tools to extract
+        self.assertIn("Excel", extractor.extract_skills("Strong skills with Excel in data analysis and financial reporting."))
+        self.assertIn("Excel", extractor.extract_skills("Proficiency in EXCEL at an advanced level is required."))
+        self.assertIn("Excel", extractor.extract_skills("Advanced Excel as well as SQL."))
+
+    def test_bare_years_in_skill_extracted_and_rejected_by_ceiling(self):
+        """Test 21: Bare '5 years in Power BI' is extracted and rejected by the experience ceiling."""
+        extractor = JobRequirementExtractor([])
+        scraper = MultiPlatformJobScraper(self.config)
+
+        exp1 = extractor.extract_experience("Candidate must have 5 years in Power BI and SQL.")
+        self.assertIn("5 Years", exp1)
+        self.assertFalse(scraper._within_ceiling(exp1, max_years=2))
+
+        exp2 = extractor.extract_experience("Role requires 3+ years of Python development.")
+        self.assertIn("3+ Years", exp2)
+        self.assertFalse(scraper._within_ceiling(exp2, max_years=2))
+
+        exp3 = extractor.extract_experience("Requires 1 year in data analytics. Freshers welcome.")
+        self.assertIn("1 Year", exp3)
+        self.assertTrue(scraper._within_ceiling(exp3, max_years=2))
 
 
 if __name__ == "__main__":

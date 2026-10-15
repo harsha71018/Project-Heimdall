@@ -74,7 +74,7 @@ class MultiPlatformJobScraper:
 
     ROLE_KEYWORDS = {
         'data', 'analyst', 'annotator', 'sql', 'developer', 'power',
-        'bi', 'fresher', 'junior', 'sr', 'senior', 'lead', 'intern',
+        'bi', 'fresher', 'junior', 'intern',
         'engineer', 'specialist', 'associate', 'trainee', 'consultant'
     }
 
@@ -328,9 +328,6 @@ class MultiPlatformJobScraper:
             self.last_run_stats["fc_retained"] = int((enriched_df["_source_engine"] == "firecrawl").sum())
             self.last_run_stats["jobspy_retained"] = int((enriched_df["_source_engine"] == "jobspy").sum())
             enriched_df.drop(columns=["_source_engine"], inplace=True)
-
-        # Persist newly seen jobs
-        self._save_seen_jobs()
 
         return enriched_df
 
@@ -776,36 +773,19 @@ class MultiPlatformJobScraper:
     )
 
     NON_SENIOR_FALSE_POSITIVES_RE = re.compile(
-        r'\b(?:lead\s+generation|lead\s+gen|leadsquared|lead\s+squared|'
-        r'principal\s+global|principal\s+financial|head\s+digital|headout|headspin|headspace)\b',
+        r'\b(?:lead\s+generation|lead\s+gen)\b',
         re.IGNORECASE
     )
 
     def _is_senior_title(self, title: str, url: str = "", company: str = "") -> bool:
         """
-        Detects senior, lead, or management postings in the job title or URL path slug.
-        Excludes URL hostname, query parameters, non-seniority phrases ('lead generation'),
-        and company names embedded in Naukri URL slugs (e.g. 'LeadSquared', 'Principal Global').
+        Detects senior, lead, or management postings in the job title only.
+        Ignores url and company so company names in URL slugs never cause false drops.
+        Only strips non-seniority phrases ('lead generation', 'lead gen') before matching.
         """
-        url_path = ""
-        if url and isinstance(url, str):
-            try:
-                url_path = urlsplit(url.strip()).path
-            except Exception:
-                url_path = url
-
         clean_title = (title or "").replace("-", " ").replace("_", " ").lower()
-        clean_path = url_path.replace("-", " ").replace("_", " ").replace("/", " ").lower()
-
-        # Strip extracted company name from the URL path slug so company words don't trigger senior drops
-        if company and isinstance(company, str):
-            co_norm = company.replace("-", " ").replace("_", " ").strip().lower()
-            if len(co_norm) >= 3:
-                clean_path = clean_path.replace(co_norm, " ")
-
-        combined = f"{clean_title} {clean_path}"
-        combined = self.NON_SENIOR_FALSE_POSITIVES_RE.sub(" ", combined)
-        return bool(self.SENIOR_TITLE_PATTERN.search(combined))
+        clean_title = self.NON_SENIOR_FALSE_POSITIVES_RE.sub(" ", clean_title)
+        return bool(self.SENIOR_TITLE_PATTERN.search(clean_title))
 
     def _resolve_row_canonical_url(self, row: Any) -> str:
         """Resolves and canonicalizes the best direct URL for a DataFrame row."""

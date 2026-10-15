@@ -286,7 +286,10 @@ def main():
     # 2. Build Formatted Excel Tracker
     generated_file = dashboard_gen.generate(enriched_jobs_df, output_path=output_filename, run_stats=row_data)
 
-    # 3. Print Summary Box
+    # 3. Commit seen jobs ledger only after Excel write succeeds
+    scraper._save_seen_jobs()
+
+    # 4. Print Summary Box
     print("\n" + "=" * 70)
     print(f"[+] SUCCESS! Total Active Opportunities Aggregated: {total_unique}")
     print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")

@@ -25,11 +25,10 @@ class JobRequirementExtractor:
                 pattern = re.compile(rf'(?:^|[\s,;/]){escaped}(?:[\s,;/]|$)', re.IGNORECASE)
             elif skill.strip().lower() == "excel":
                 # Avoid matching English verb usage: "to excel", "will excel in", "excel at", etc.
+                # Matches uppercase/titlecase Excel/EXCEL or lowercase excel when not followed by prepositions
                 pattern = re.compile(
                     r'(?<!\bto\s)(?<!\bwill\s)(?<!\bcan\s)(?<!\bwho\s)(?<!\byou\s)(?<!\bthey\s)(?<!\bmust\s)(?<!\bshould\s)'
-                    r'\bExcel\b'
-                    r'(?!\s+(?:in|at|within|under|when|as|by)\b)',
-                    re.IGNORECASE
+                    r'\b(?:Excel\b|EXCEL\b|excel\b(?!\s+(?:in|at|within|under|when|as|by)\b))'
                 )
             elif " " in skill:
                 # Multi-word skills like "Power BI", "Data Annotation"
@@ -52,13 +51,13 @@ class JobRequirementExtractor:
 
     COMPANY_SUBJECT_MARKERS = [
         "we have", "our company", "with over", "with more than",
-        "history of", "legacy of", "celebrating", "founded in",
+        "history of", "legacy of", "celebrating", "founded in", "established in",
         "in business for", "operating for", "in the last", "in the past",
         "over the last", "over the past", "for the last", "for the past",
         "contract of", "bond of", "duration of", "tenure of", "notice period of"
     ]
     COMPANY_POST_MARKERS = [
-        "in the industry", "in industry", "in business", "of excellence",
+        "in the industry", "in industry", "in business", "of excellence", "excellence",
         "serving clients", "track record", "market leader"
     ]
 
@@ -130,6 +129,7 @@ class JobRequirementExtractor:
 
         # Tier 3: Unprefixed single/plus numbers (requires explicit exp/experience, '+' sign, or 'yoe')
         numeric_patterns = [
+            rf'\b(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?)\s+(?:in|of|with)\b)',
             rf'\b(\d+(?:\.\d+)?\+?\s*{any_unit}\s*(?:[\'’]s?\s*)?(?:of\s+)?(?:relevant\s+|hands[-\s]on\s+|work\s+|industry\s+|professional\s+|total\s+)?exp(?:erience)?)\b',
             rf'\b(\d+(?:\.\d+)?\+\s*{any_unit})',
             rf'\b(\d+(?:\.\d+)?\+?\s*yoe)\b',

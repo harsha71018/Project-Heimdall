@@ -279,7 +279,7 @@ job_automation/
 ├── seen_jobs.json            # Persistent URL ledger with 45-day rolling pruning
 ├── applications.json         # Persistent application status & notes ledger
 ├── run_log.csv               # Historical telemetry: timestamp, mode, credits, candidates, drops
-└── tests/                    # Unit and regression test suite (35 passing tests)
+└── tests/                    # Unit and regression test suite (41 passing tests)
     ├── test_phase2.py
     ├── test_refinements.py
     ├── test_experience_order.py
@@ -290,7 +290,7 @@ job_automation/
 
 ## 🧪 Testing & Production Verification
 
-The entire codebase is verified by 35 automated unit and acceptance tests covering URL validation, date bounds, ceiling range-blanking, atomic persistence, formula injection protection, Kanban memory persistence, and multi-file sync precedence.
+The entire codebase is verified by 41 automated unit and acceptance tests covering URL validation, date bounds, ceiling range-blanking, atomic persistence, formula injection protection, Kanban memory persistence, multi-tab sync, archive resurrection prevention, and multi-file sync precedence.
 
 To run the complete test suite:
 ```powershell
