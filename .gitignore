@@ -48,3 +48,4 @@ applications*.json
 *.pdf
 *_backup.*
 /audit_phase1/
+*audit*.md
