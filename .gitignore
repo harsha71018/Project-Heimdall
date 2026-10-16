@@ -45,5 +45,6 @@ applications*.json
 
 .backups/
 *.zip
+*.pdf
 *_backup.*
 /audit_phase1/

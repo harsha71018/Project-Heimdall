@@ -13,7 +13,7 @@ Includes a dedicated, isolated pipeline for **IT Support, Helpdesk & ServiceNow*
 - [Customizing Your Search (`config.yaml`)](#-customizing-your-search-configyaml)
 - [Dedicated IT Support Pipeline (`run_it_support.bat`)](#-dedicated-it-support-pipeline)
 - [Scraping Modes & Credit Budgeting](#-scraping-modes--credit-budgeting)
-- [Understanding the Dual-Tab Excel Tracker](#-understanding-the-dual-tab-excel-tracker)
+- [Understanding the Triple-Tab Excel Tracker](#-understanding-the-triple-tab-excel-tracker)
 - [Automating Daily Sweeps (Windows Task Scheduler)](#-automating-daily-sweeps-windows-task-scheduler)
 - [Architecture & File Reference](#-architecture--file-reference)
 - [Testing & Production Verification](#-testing--production-verification)
@@ -33,7 +33,7 @@ flowchart TD
     E --> F["Senior Title & Slug Gate<br/>(Rejects Sr / Lead / Manager / Director)"]
     F --> G["Experience Ceiling Gate<br/>(Rejects > 2 YOE via Range-Blanking)"]
     G --> H["Freshness Engine (seen_jobs.json)<br/>(Tags 🟢 NEW vs ⚪ SEEN)"]
-    H --> I["Excel Dashboard Generator<br/>(Tab 1: Leads, Tab 2: Funnel Audit)"]
+    H --> I["Excel Dashboard Generator<br/>(Tab 1: Leads, Tab 2: Kanban, Tab 3: Funnel Audit)"]
     I --> J["Dual Output & Persistent Memory<br/>(Tracker_Latest.xlsx + leads/ + applications.json)"]
     J --> K["Analytics Logger<br/>(run_log.csv)"]
 ```
@@ -51,12 +51,13 @@ flowchart TD
    - New listings are highlighted as **`🟢 NEW`** (Bold Green).
    - Repeated listings from earlier runs are tagged as **`⚪ SEEN`** (Slate Gray).
    - Naukri listings older than 14 days decoded from URL slugs are automatically dropped.
-4. **Interactive Dual-Tab Excel Output & Persistent Memory**:
+4. **Interactive Triple-Tab Excel Output & Persistent Memory**:
    - Clickable native **"Apply Now"** buttons jump straight to the application page.
    - Application Status dropdowns (`Not Applied`, `Applied`, `Interviewing`, `Offer Received`, etc.).
    - **Persistent Memory**: Statuses and notes you enter in Excel are synchronized and preserved in `applications.json` across all future runs.
    - **Dual Output**: Generates both a timestamped archive in `leads/` (e.g. `leads/Job_Leads_2026-10-14_0110.xlsx`) and the stable desktop anchor `Tracker_Latest.xlsx`.
-   - **Tab 2: Run Summary**: Full audit table displaying raw candidates, filter drops, and credit consumption.
+   - **Tab 2: Applied & In Progress**: Permanent Kanban board tracking active applications across all past and future runs.
+   - **Tab 3: Run Summary**: Full audit table displaying raw candidates, filter drops, and credit consumption.
    - **Protected Against File Locks**: If open in Excel, saves safely to `_Latest.xlsx` without crashing.
 
 ---
@@ -247,9 +248,9 @@ You can have Windows automatically run a silent Frugal scan every morning at 8:0
 1. Open **Command Prompt** (or PowerShell).
 2. Run this single command:
    ```cmd
-   schtasks /create /tn "JobHunter" /tr "\"d:\ANTIGRAVITY WORKSPACE\job_automation\run_scheduled.bat\"" /sc daily /st 08:00
+   schtasks /create /tn "JobHunter" /tr "\"C:\path\to\job_automation\run_scheduled.bat\"" /sc daily /st 08:00
    ```
-*(Replace `d:\ANTIGRAVITY WORKSPACE\job_automation` with your friend's actual folder path if running on their machine).*
+*(Replace `C:\path\to\job_automation` with your actual project directory path).*
 
 - Uses [`run_scheduled.bat`](run_scheduled.bat), which includes automatic 5 MB log rotation, timestamp logging, and unbuffered execution.
 - Runs in **Frugal mode** (costs only 8 credits/day = ~240/month, safely inside the 1,000 free monthly tier).
