@@ -69,8 +69,11 @@ class ITSupportScraper(MultiPlatformJobScraper):
         self.last_run_stats["fc_candidates"] = 0
         self.last_run_stats["fc_markdown_hits"] = 0
         self.last_run_stats["fc_retained"] = 0
+        self.last_run_stats["fc_errors"] = 0
         self.last_run_stats["jobspy_candidates"] = 0
         self.last_run_stats["jobspy_retained"] = 0
+        self.last_run_stats["jobspy_errors"] = 0
+        self.last_run_stats["queries_attempted"] = 0
         self.last_run_stats["dropped_stale_naukri"] = 0
         self.last_run_stats["dropped_future_naukri"] = 0
         self.last_run_stats["unparseable_naukri_dates"] = 0
@@ -88,7 +91,7 @@ class ITSupportScraper(MultiPlatformJobScraper):
                     if not fc_df.empty:
                         fc_df["_source_engine"] = "firecrawl"
                         all_results.append(fc_df)
-                    time.sleep(1)
+                    time.sleep(12.5)
 
         # 2. JobSpy Search (LinkedIn + Indeed) across all locations
         platforms_str = ", ".join(p.capitalize() for p in platforms)
@@ -97,6 +100,7 @@ class ITSupportScraper(MultiPlatformJobScraper):
             for title in job_titles:
                 print(f"[*] [Scraping] Searching for '{title}' in '{loc}' across {platforms}...")
                 try:
+                    self.last_run_stats["queries_attempted"] += 1
                     jobs_df = scrape_jobs(
                         site_name=platforms,
                         search_term=title,
@@ -104,7 +108,7 @@ class ITSupportScraper(MultiPlatformJobScraper):
                         results_wanted=results_wanted,
                         hours_old=hours_old,
                         country_indeed=country_indeed,
-                        linkedin_fetch_description=True,
+                        fetch_description=True,
                         verbose=0
                     )
 
@@ -121,6 +125,7 @@ class ITSupportScraper(MultiPlatformJobScraper):
                         print(f"   -> No listings found for '{title}' ({loc}).")
 
                 except Exception as e:
+                    self.last_run_stats["jobspy_errors"] += 1
                     print(f"   [!] Warning: Error while scraping '{title}' ({loc}): {str(e)}")
                     continue
 
@@ -226,11 +231,27 @@ def main():
     dashboard_gen = ExcelDashboardGenerator(config)
 
     if enriched_jobs_df.empty:
+        total_raw_candidates = stats.get("fc_candidates", 0) + stats.get("jobspy_candidates", 0)
+        fc_errors = stats.get("fc_errors", 0)
+        jobspy_errors = stats.get("jobspy_errors", 0)
+        use_firecrawl = config.get("firecrawl", {}).get("enabled", True) and bool(os.getenv("FIRECRAWL_API_KEY"))
+        all_sources_failed = (
+            total_raw_candidates == 0 and
+            jobspy_errors > 0 and
+            (not use_firecrawl or fc_errors > 0)
+        )
+
         print("\n" + "=" * 70)
-        print("[!] No jobs were returned for IT Support roles.")
+        if all_sources_failed:
+            print("[!] ERROR: All attempted IT Support job scraping sources failed due to network or API connection errors.")
+            print("    No platforms could be reached. Please check your internet connection or credentials.")
+        else:
+            print("[!] No jobs were returned for IT Support roles matching criteria today.")
         print(f"[+] Firecrawl Credit Audit              : {credit_audit_str}")
         print(log_status_str)
         print("=" * 70)
+        if all_sources_failed:
+            sys.exit(1)
         sys.exit(0)
 
     generated_file = dashboard_gen.generate(enriched_jobs_df, output_path=output_filename, run_stats=row_data)

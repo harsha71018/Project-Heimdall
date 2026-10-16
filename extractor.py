@@ -1,5 +1,5 @@
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 class JobRequirementExtractor:
@@ -78,6 +78,19 @@ class JobRequirementExtractor:
         re.IGNORECASE
     )
 
+    REMOTE_ARRANGEMENT_PATTERN = re.compile(
+        r'\b(?:work\s+from\s+home|wfh|fully\s+remote|100%\s+remote|remote\s+(?:first|friendly|role|job|position|opportunity|work|worker|working)|permanent\s+remote)\b',
+        re.IGNORECASE
+    )
+    REMOTE_DUTY_PATTERN = re.compile(
+        r'\bremote\s+(?:support|desktop|troubleshooting|access|assistance|administration|tools|infrastructure|monitoring|management)\b',
+        re.IGNORECASE
+    )
+    REMOTE_NEGATION_PATTERN = re.compile(
+        r'\b(?:not\s+(?:a\s+)?remote|non-remote|no\s+remote|not\s+(?:available\s+for\s+)?wfh|neither\s+remote)\b',
+        re.IGNORECASE
+    )
+
     def extract_experience(self, description: str) -> str:
         """Extract experience requirement (e.g. '0-2 years', '3–5 YOE', 'Fresher', 'Entry-Level')."""
         if not description or not isinstance(description, str):
@@ -146,16 +159,47 @@ class JobRequirementExtractor:
 
         return "Not Specified"
 
-    def extract_work_mode(self, location: str, description: str) -> str:
-        """Determine if job is Remote, Hybrid, or On-site."""
-        combined_text = f"{location or ''} {description or ''}".lower()
+    def extract_work_mode(self, location: str, description: str, is_remote: Optional[bool] = None) -> str:
+        """
+        Determine if job is Remote, Hybrid, or On-site.
+        Guards against:
+        - JobSpy is_remote boolean field
+        - Negation ('not remote', 'non-remote', 'no remote')
+        - Technical duties ('remote support', 'remote desktop', 'remote troubleshooting')
+        """
+        if is_remote is True:
+            return "Remote"
 
-        if "remote" in combined_text or "work from home" in combined_text or "wfh" in combined_text:
+        loc_clean = (location or "").strip()
+        loc_lower = loc_clean.lower()
+        desc_clean = (description or "").strip()
+        desc_lower = desc_clean.lower()
+        combined_text = f"{loc_lower} {desc_lower}"
+
+        # If location itself explicitly indicates remote
+        if re.search(r'\b(?:remote|wfh|work\s+from\s+home)\b', loc_lower):
+            if not self.REMOTE_NEGATION_PATTERN.search(loc_lower):
+                return "Remote"
+
+        # Check hybrid arrangement
+        if "hybrid" in loc_lower or re.search(r'\b(?:hybrid\s+(?:work|model|role|setup|environment)|hybrid)\b', desc_lower):
+            return "Hybrid"
+
+        # Check positive remote arrangement phrases
+        has_remote_arrangement = bool(self.REMOTE_ARRANGEMENT_PATTERN.search(combined_text))
+
+        # If bare "remote" appears, ensure it's not purely a technical duty (e.g. "remote support")
+        if not has_remote_arrangement and re.search(r'\bremote\b', combined_text):
+            cleaned_text = self.REMOTE_DUTY_PATTERN.sub('', combined_text)
+            if re.search(r'\bremote\b', cleaned_text) and not self.REMOTE_NEGATION_PATTERN.search(cleaned_text):
+                has_remote_arrangement = True
+
+        if has_remote_arrangement and not self.REMOTE_NEGATION_PATTERN.search(combined_text):
             return "Remote"
         elif "hybrid" in combined_text:
             return "Hybrid"
-        elif location:
-            return f"On-site ({location})"
+        elif loc_clean:
+            return f"On-site ({loc_clean})"
         else:
             return "On-site"
 
@@ -163,10 +207,12 @@ class JobRequirementExtractor:
         """Enrich a single raw job dictionary with extracted metrics."""
         description = job_data.get("description", "")
         location = job_data.get("location", "")
+        is_remote_val = job_data.get("is_remote")
+        is_remote = True if is_remote_val is True or str(is_remote_val).lower() == "true" else False if is_remote_val is False or str(is_remote_val).lower() == "false" else None
 
         extracted_skills = self.extract_skills(description)
         experience = self.extract_experience(description)
-        work_mode = self.extract_work_mode(location, description)
+        work_mode = self.extract_work_mode(location, description, is_remote=is_remote)
 
         return {
             "skills": ", ".join(extracted_skills) if extracted_skills else "General Technical Skills",

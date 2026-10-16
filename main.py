@@ -273,14 +273,30 @@ def main():
     dashboard_gen = ExcelDashboardGenerator(config)
 
     if enriched_jobs_df.empty:
+        total_raw_candidates = fc_candidates + jobspy_candidates
+        fc_errors = stats.get("fc_errors", 0)
+        jobspy_errors = stats.get("jobspy_errors", 0)
+        use_firecrawl = config.get("firecrawl", {}).get("enabled", True) and bool(os.getenv("FIRECRAWL_API_KEY"))
+        all_sources_failed = (
+            total_raw_candidates == 0 and
+            jobspy_errors > 0 and
+            (not use_firecrawl or fc_errors > 0)
+        )
+
         print("\n" + "=" * 70)
-        print("[!] No jobs were returned. Check your internet connection or search parameters.")
+        if all_sources_failed:
+            print("[!] ERROR: All attempted job scraping sources failed due to network or API connection errors.")
+            print("    No platforms could be reached. Please check your internet connection or credentials.")
+        else:
+            print("[!] No jobs matching criteria were returned today (zero new leads or all filtered).")
         print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
         print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")
         print(f"    - JobSpy (LinkedIn / Indeed)    : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
         print(f"[+] Firecrawl Credit Audit              : {credit_audit_str}")
         print(log_status_str)
         print("=" * 70)
+        if all_sources_failed:
+            sys.exit(1)
         sys.exit(0)
 
     # 2. Build Formatted Excel Tracker

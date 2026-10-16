@@ -263,7 +263,7 @@ You can have Windows automatically run a silent Frugal scan every morning at 8:0
 job_automation/
 ├── config.yaml               # User search configuration, skills, and mode parameters
 ├── config_it_support.yaml    # IT Support / ServiceNow configuration (Hyderabad & Bengaluru)
-├── requirements.txt          # Pinned Python dependencies
+├── requirements.txt          # Python dependency requirements (tested minimum bounds)
 ├── .env.example              # Template for API keys
 ├── .env                      # [PRIVATE] Live Firecrawl API key
 ├── .gitignore                # Protects credentials, logs, and personal outputs

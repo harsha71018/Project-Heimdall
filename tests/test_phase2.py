@@ -760,6 +760,57 @@ class TestPhase2Acceptance(unittest.TestCase):
         self.assertIn("1 Year", exp3)
         self.assertTrue(scraper._within_ceiling(exp3, max_years=2))
 
+    def test_work_mode_extraction_arrangement_vs_duty_and_negation(self):
+        """Test 22: Work mode correctly differentiates work arrangements from technical duties and negations."""
+        extractor = JobRequirementExtractor([])
+
+        # Technical IT duties should NOT trigger Remote
+        self.assertEqual(
+            extractor.extract_work_mode("Hyderabad", "Provide remote support to desktop users via AnyDesk and TeamViewer."),
+            "On-site (Hyderabad)"
+        )
+        self.assertEqual(
+            extractor.extract_work_mode("Bengaluru", "Configure remote desktop administration and troubleshooting tools."),
+            "On-site (Bengaluru)"
+        )
+
+        # Negations should NOT trigger Remote
+        self.assertEqual(
+            extractor.extract_work_mode("Hyderabad", "This is an in-office position, not a remote opportunity."),
+            "On-site (Hyderabad)"
+        )
+        self.assertEqual(
+            extractor.extract_work_mode("Hyderabad", "Non-remote role based in our financial district campus."),
+            "On-site (Hyderabad)"
+        )
+
+        # Positive arrangements SHOULD trigger Remote
+        self.assertEqual(
+            extractor.extract_work_mode("Hyderabad", "100% remote role with flexible working hours."),
+            "Remote"
+        )
+        self.assertEqual(
+            extractor.extract_work_mode("Remote", "Junior Data Analyst needed."),
+            "Remote"
+        )
+        self.assertEqual(
+            extractor.extract_work_mode("Hyderabad", "Work from home full time."),
+            "Remote"
+        )
+
+        # JobSpy native is_remote boolean override
+        self.assertEqual(
+            extractor.extract_work_mode("Hyderabad", "Office based", is_remote=True),
+            "Remote"
+        )
+
+        # Hybrid arrangements
+        self.assertEqual(
+            extractor.extract_work_mode("Hyderabad", "Hybrid work setup with 2 days in office and 3 days remote."),
+            "Hybrid"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+

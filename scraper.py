@@ -248,8 +248,11 @@ class MultiPlatformJobScraper:
         self.last_run_stats["fc_candidates"] = 0
         self.last_run_stats["fc_markdown_hits"] = 0
         self.last_run_stats["fc_retained"] = 0
+        self.last_run_stats["fc_errors"] = 0
         self.last_run_stats["jobspy_candidates"] = 0
         self.last_run_stats["jobspy_retained"] = 0
+        self.last_run_stats["jobspy_errors"] = 0
+        self.last_run_stats["queries_attempted"] = 0
         self.last_run_stats["dropped_stale_naukri"] = 0
         self.last_run_stats["dropped_future_naukri"] = 0
         self.last_run_stats["unparseable_naukri_dates"] = 0
@@ -263,12 +266,13 @@ class MultiPlatformJobScraper:
         # -------------------------------------------------------------
         if use_firecrawl:
             print(f"\n[*] [Firecrawl v2 Engine] Mode: {self.active_mode.upper()} (Deep Scrape: {self.deep_scrape}, Limit: {self.search_limit_per_role}/role)...")
-            for title in job_titles:
+            for idx, title in enumerate(job_titles):
                 fc_df = self._scrape_with_firecrawl(title, location, limit=self.search_limit_per_role)
                 if not fc_df.empty:
                     fc_df["_source_engine"] = "firecrawl"
                     all_results.append(fc_df)
-                time.sleep(1)
+                if idx < len(job_titles) - 1:
+                    time.sleep(12.5)
 
         # -------------------------------------------------------------
         # 2. Local JobSpy Engine
@@ -278,6 +282,7 @@ class MultiPlatformJobScraper:
         for idx, title in enumerate(job_titles):
             print(f"[*] [Scraping] Searching for '{title}' in '{location}' across {platforms}...")
             try:
+                self.last_run_stats["queries_attempted"] += 1
                 jobs_df = scrape_jobs(
                     site_name=platforms,
                     search_term=title,
@@ -285,7 +290,7 @@ class MultiPlatformJobScraper:
                     results_wanted=results_wanted,
                     hours_old=hours_old,
                     country_indeed=country_indeed,
-                    linkedin_fetch_description=True,
+                    fetch_description=True,
                     verbose=0
                 )
 
@@ -302,6 +307,7 @@ class MultiPlatformJobScraper:
                     print(f"   -> No listings found for '{title}'.")
 
             except Exception as e:
+                self.last_run_stats["jobspy_errors"] += 1
                 print(f"   [!] Warning: Error while scraping '{title}': {str(e)}")
                 continue
 
@@ -353,6 +359,7 @@ class MultiPlatformJobScraper:
             payload["scrapeOptions"] = {"formats": ["markdown"]}
 
         try:
+            self.last_run_stats["queries_attempted"] = self.last_run_stats.get("queries_attempted", 0) + 1
             print(f"   [Firecrawl v2] Querying '{title}' (\"{location}\")...")
             res = requests.post(
                 "https://api.firecrawl.dev/v2/search",
@@ -365,8 +372,26 @@ class MultiPlatformJobScraper:
                 print("   [!] Firecrawl credits depleted (HTTP 402 Payment Required). Continuing with local JobSpy.")
                 return pd.DataFrame()
 
+            if res.status_code == 429:
+                retry_after = res.headers.get("Retry-After")
+                wait_secs = int(retry_after) if retry_after and retry_after.isdigit() else 15
+                print(f"   [!] Firecrawl rate limited (HTTP 429). Backing off {wait_secs}s before retrying once...")
+                time.sleep(wait_secs)
+                try:
+                    res = requests.post(
+                        "https://api.firecrawl.dev/v2/search",
+                        headers=headers,
+                        json=payload,
+                        timeout=self.timeout
+                    )
+                except Exception as e:
+                    print(f"   [!] Firecrawl retry request failed: {e}")
+                    self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
+                    return pd.DataFrame()
+
             if res.status_code != 200:
                 print(f"   [!] Firecrawl v2 returned status {res.status_code}: {res.text[:100]}")
+                self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
                 return pd.DataFrame()
 
             raw_data = res.json().get("data", {})
@@ -423,9 +448,11 @@ class MultiPlatformJobScraper:
 
         except requests.exceptions.Timeout:
             print(f"   [!] Firecrawl request timed out after {self.timeout}s for '{title}'.")
+            self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
             return pd.DataFrame()
         except Exception as e:
             print(f"   [!] Firecrawl Search Error: {str(e)}")
+            self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
             return pd.DataFrame()
 
     @staticmethod
