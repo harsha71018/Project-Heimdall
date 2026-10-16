@@ -49,3 +49,4 @@ applications*.json
 *_backup.*
 /audit_phase1/
 *audit*.md
+*_it_support*

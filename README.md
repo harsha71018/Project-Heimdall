@@ -6,8 +6,6 @@
 
 An automated job aggregation and tracking engine. It automatically discovers, validates, and filters job postings across **major platforms** (**LinkedIn, Indeed, and Naukri**), enriches listings with extracted skills, eliminates senior roles for 0–2 YOE freshers, tracks lead freshness, and builds a styled, interactive **Excel Application Dashboard** with native **"Apply Now"** buttons, persistent status/notes memory, and a full audit summary.
 
-Includes a dedicated, isolated pipeline for **IT Support, Helpdesk & ServiceNow** roles across multiple locations (Hyderabad & Bengaluru).
-
 ---
 
 ## 📑 Table of Contents
@@ -15,7 +13,6 @@ Includes a dedicated, isolated pipeline for **IT Support, Helpdesk & ServiceNow*
 - [How to Share This Tool with Friends](#-how-to-share-this-tool-with-friends)
 - [Quick Start Guide (For You or a Friend)](#-quick-start-guide-for-you-or-a-friend)
 - [Customizing Your Search (`config.yaml`)](#-customizing-your-search-configyaml)
-- [Dedicated IT Support Pipeline (`run_it_support.bat`)](#-dedicated-it-support-pipeline)
 - [Scraping Modes & Credit Budgeting](#-scraping-modes--credit-budgeting)
 - [Understanding the Triple-Tab Excel Tracker](#-understanding-the-triple-tab-excel-tracker)
 - [Automating Daily Sweeps (Windows Task Scheduler)](#-automating-daily-sweeps-windows-task-scheduler)
@@ -86,18 +83,12 @@ When sharing this project or creating a custom package for a friend, follow thes
 - `README.md` (this guide)
 - `.gitignore` (prevents accidental credential leaks)
 
-### 🌟 Optional IT Support & ServiceNow Module:
-If your friend specifically targets **IT Support, Desktop Support, or ServiceNow roles**, also include:
-- `config_it_support.yaml` (IT Support / ServiceNow configuration)
-- `main_it_support.py` (Dedicated multi-location IT Support runner)
-- `run_it_support.bat` (1-click IT Support runner)
-
-### ⛔ NEVER Send These Files:
+### ⛔ NEVER Share These Files:
 - **`.env`** (⚠️ Contains your private API key! Never share this file).
-- `seen_jobs.json` / `seen_jobs_it_support.json` (Contains your personal run history).
-- `applications.json` / `applications_it_support.json` (Your personal application notes).
-- `run_log.csv` / `run_log_it_support.csv` (Your credit usage and run analytics).
-- `Tracker_Latest.xlsx` / `leads/` (Your personal job leads).
+- `seen_jobs*.json` (Contains your personal run history).
+- `applications*.json` (Your personal application notes).
+- `run_log*.csv` (Your credit usage and run analytics).
+- `Tracker_Latest*.xlsx` / `leads/` (Your personal job leads).
 - `__pycache__/` (Machine-specific compiled cache).
 
 ---
@@ -119,10 +110,8 @@ Ensure Python 3.10+ (tested and verified up to Python 3.13) is installed.
 > **Note**: If you don't provide an API key, the tool will gracefully skip Firecrawl and still scrape LinkedIn and Indeed for **100% free**!
 
 ### Step 3: Run the Tool!
-- **Data Analyst Pipeline**: Just double-click **`run.bat`**.
+- **1-Click Launch**: Just double-click **`run.bat`**.
   - Automatically verifies dependencies, displays the scraping mode countdown, and generates `Tracker_Latest.xlsx`.
-- **IT Support Pipeline**: Just double-click **`run_it_support.bat`**.
-  - Runs the multi-location sweep (Hyderabad + Bengaluru) and generates `Tracker_Latest_IT_Support.xlsx`.
 - **Command Line**:
   ```bash
   py -m pip install -r requirements.txt
@@ -169,16 +158,6 @@ skills_filter:
     - "Data Cleaning"
     - "ETL"
 ```
-
----
-
-## 🖥️ Dedicated IT Support Pipeline
-
-For IT Support, Desktop Support, and ServiceNow roles:
-- **Runner**: Double-click [`run_it_support.bat`](run_it_support.bat).
-- **Configuration**: Edit [`config_it_support.yaml`](config_it_support.yaml).
-- **Multi-Location**: Natively queries both **Hyderabad** and **Bengaluru**.
-- **100% Isolated**: Uses its own `leads_it_support/` archive, `Tracker_Latest_IT_Support.xlsx`, `applications_it_support.json`, and `seen_jobs_it_support.json`. It will never touch or pollute your primary Data Analyst tracking database.
 
 ---
 
@@ -266,7 +245,6 @@ You can have Windows automatically run a silent Frugal scan every morning at 8:0
 ```text
 job_automation/
 ├── config.yaml               # User search configuration, skills, and mode parameters
-├── config_it_support.yaml    # IT Support / ServiceNow configuration (Hyderabad & Bengaluru)
 ├── requirements.txt          # Python dependency requirements (tested minimum bounds)
 ├── .env.example              # Template for API keys
 ├── .env                      # [PRIVATE] Live Firecrawl API key
@@ -274,17 +252,15 @@ job_automation/
 ├── extractor.py              # Skill keyword matcher & experience/work-mode parser
 ├── scraper.py                # Dual engine orchestrator, ceiling filter, senior filter & seen ledger
 ├── excel_generator.py        # 12-column openpyxl builder with dropdowns, dual output, Tab 2 Kanban & Tab 3 audit
-├── main.py                   # Data Analyst CLI entrypoint, credit delta checks & CSV migration logger
-├── main_it_support.py        # Dedicated multi-location IT Support runner
-├── run.bat                   # 1-Click interactive Data Analyst launcher with countdown
-├── run_it_support.bat        # 1-Click interactive IT Support launcher
+├── main.py                   # CLI orchestrator, credit delta checks & CSV migration logger
+├── run.bat                   # 1-Click interactive launcher with countdown
 ├── run_scheduled.bat         # Headless unattended runner with 5MB log rotation
 ├── Tracker_Latest.xlsx       # Stable desktop anchor for daily tracking
 ├── leads/                    # Timestamped historical archive folder (auto-generated)
 ├── seen_jobs.json            # Persistent URL ledger with 45-day rolling pruning
 ├── applications.json         # Persistent application status & notes ledger
 ├── run_log.csv               # Historical telemetry: timestamp, mode, credits, candidates, drops
-└── tests/                    # Unit and regression test suite (41 passing tests)
+└── tests/                    # Unit and regression test suite (42 passing tests)
     ├── test_phase2.py
     ├── test_refinements.py
     ├── test_experience_order.py
