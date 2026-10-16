@@ -195,7 +195,7 @@ def main():
     platforms = config["search"].get("platforms", [])
 
     print("=" * 70)
-    print("  [*] AUTOMATED JOB DISCOVERY & APPLICATION TRACKER ENGINE")
+    print("  [*] PROJECT HEIMDALL — AUTOMATED JOB DISCOVERY & TRACKER ENGINE")
     print("=" * 70)
     print(f"[+] ACTIVE MODE    : {active_mode.upper()}")
     if scraper.deep_scrape:

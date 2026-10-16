@@ -1,8 +1,10 @@
-# 🎯 Automated Multi-Platform Job Hunter & Application Tracker
+# 🛡️ Project Heimdall: Automated Multi-Platform Job Hunter & Application Tracker
 
 ![Python 3.10-3.13](https://img.shields.io/badge/Python-3.10%E2%80%933.13-blue?logo=python&logoColor=white)
 ![Tests](https://img.shields.io/badge/Tests-42%20Passing-brightgreen)
 ![Platforms](https://img.shields.io/badge/Platforms-LinkedIn%20%7C%20Indeed%20%7C%20Naukri-0A66C2)
+
+> **Project Heimdall** acts as the all-seeing gatekeeper for your job hunt—scanning across LinkedIn, Indeed, Naukri, and corporate ATS portals, blocking senior/expired roles at the gate, and syncing verified 0–2 YOE leads into a bi-directional 3-tab Excel command center.
 
 An automated job aggregation and tracking engine. It automatically discovers, validates, and filters job postings across **major platforms** (**LinkedIn, Indeed, and Naukri**), enriches listings with extracted skills, eliminates senior roles for 0–2 YOE freshers, tracks lead freshness, and builds a styled, interactive **Excel Application Dashboard** with native **"Apply Now"** buttons, persistent status/notes memory, and a full audit summary.
 
@@ -65,11 +67,11 @@ flowchart TD
 
 ## 🤝 How to Share This Tool with Friends
 
-The pre-built **`JobHunter.zip`** in the root directory contains the clean, universal core Data Analyst pipeline.
+The pre-built **`Project-Heimdall.zip`** in the root directory contains the clean, universal core Data Analyst pipeline.
 
 When sharing this project or creating a custom package for a friend, follow these privacy rules:
 
-### ✅ Core Package Files (Included in `JobHunter.zip`):
+### ✅ Core Package Files (Included in `Project-Heimdall.zip`):
 - `config.yaml` (their Data Analyst search configuration)
 - `requirements.txt` (dependencies)
 - `.env.example` (API key template)
@@ -231,9 +233,9 @@ You can have Windows automatically run a silent Frugal scan every morning at 8:0
 1. Open **Command Prompt** (or PowerShell).
 2. Run this single command:
    ```cmd
-   schtasks /create /tn "JobHunter" /tr "\"C:\path\to\job_automation\run_scheduled.bat\"" /sc daily /st 08:00
+   schtasks /create /tn "Project-Heimdall" /tr "\"C:\path\to\Project-Heimdall\run_scheduled.bat\"" /sc daily /st 08:00
    ```
-*(Replace `C:\path\to\job_automation` with your actual project directory path).*
+*(Replace `C:\path\to\Project-Heimdall` with your actual project directory path).*
 
 - Uses [`run_scheduled.bat`](run_scheduled.bat), which includes automatic 5 MB log rotation, timestamp logging, and unbuffered execution.
 - Runs in **Frugal mode** (costs only 8 credits/day = ~240/month, safely inside the 1,000 free monthly tier).
@@ -243,7 +245,7 @@ You can have Windows automatically run a silent Frugal scan every morning at 8:0
 ## 📁 Architecture & File Reference
 
 ```text
-job_automation/
+Project-Heimdall/
 ├── config.yaml               # User search configuration, skills, and mode parameters
 ├── requirements.txt          # Python dependency requirements (tested minimum bounds)
 ├── .env.example              # Template for API keys

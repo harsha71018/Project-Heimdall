@@ -1,9 +1,9 @@
 @echo off
-title "Automated Job Hunter and Excel Dashboard"
+title "Project Heimdall — Automated Job Hunter & Excel Dashboard"
 color 0B
 
 echo =====================================================================
-echo       AUTOMATED JOB DISCOVERY AND APPLICATION TRACKER ENGINE
+echo       PROJECT HEIMDALL — AUTOMATED JOB DISCOVERY & TRACKER ENGINE
 echo =====================================================================
 echo.
 
