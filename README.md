@@ -1,5 +1,9 @@
 # 🎯 Automated Multi-Platform Job Hunter & Application Tracker
 
+![Python 3.10-3.13](https://img.shields.io/badge/Python-3.10%E2%80%933.13-blue?logo=python&logoColor=white)
+![Tests](https://img.shields.io/badge/Tests-42%20Passing-brightgreen)
+![Platforms](https://img.shields.io/badge/Platforms-LinkedIn%20%7C%20Indeed%20%7C%20Naukri-0A66C2)
+
 An automated job aggregation and tracking engine. It automatically discovers, validates, and filters job postings across **major platforms** (**LinkedIn, Indeed, and Naukri**), enriches listings with extracted skills, eliminates senior roles for 0–2 YOE freshers, tracks lead freshness, and builds a styled, interactive **Excel Application Dashboard** with native **"Apply Now"** buttons, persistent status/notes memory, and a full audit summary.
 
 Includes a dedicated, isolated pipeline for **IT Support, Helpdesk & ServiceNow** roles across multiple locations (Hyderabad & Bengaluru).
