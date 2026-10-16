@@ -11,16 +11,54 @@ An automated job aggregation and tracking engine. It automatically discovers, va
 ---
 
 ## 📑 Table of Contents
+- [⚠️ Default Profile Notice](#-default-profile-notice-customization-first-steps)
+- [🌐 Supported Platforms & Zero-Cost Breakdown](#-supported-platforms--zero-cost-breakdown)
 - [How It Works](#-how-it-works)
-- [How to Share This Tool with Friends](#-how-to-share-this-tool-with-friends)
-- [Quick Start Guide (For You or a Friend)](#-quick-start-guide-for-you-or-a-friend)
-- [Customizing Your Search (`config.yaml`)](#-customizing-your-search-configyaml)
+- [Quick Start Guide (Windows, macOS, Linux)](#-quick-start-guide-for-you-or-a-friend)
+- [How to Customize for Your Own Role & City](#-how-to-customize-for-your-own-role--city)
 - [Scraping Modes & Credit Budgeting](#-scraping-modes--credit-budgeting)
 - [Understanding the Triple-Tab Excel Tracker](#-understanding-the-triple-tab-excel-tracker)
-- [Automating Daily Sweeps (Windows Task Scheduler)](#-automating-daily-sweeps-windows-task-scheduler)
-- [Architecture & File Reference](#-architecture--file-reference)
+- [Automating Daily Sweeps (Windows Task Scheduler & macOS Cron)](#-automating-daily-sweeps-windows-task-scheduler--macos-cron)
+- [Architecture & Tech Stack](#-architecture--file-reference)
+- [How to Share This Tool with Friends](#-how-to-share-this-tool-with-friends)
 - [Testing & Production Verification](#-testing--production-verification)
 - [Troubleshooting](#-troubleshooting)
+
+---
+
+## ⚠️ Default Profile Notice (Customization First-Steps)
+
+> [!IMPORTANT]
+> **Out-of-the-Box Configuration:**
+> This repository ships pre-configured with the author's target job search profile:
+> * **Roles:** Data Analyst, Business Analyst, Junior Data Analyst, MIS Executive
+> * **Location:** Hyderabad, India (with Remote support)
+> * **Experience Level:** 0–2 Years of Experience (Entry-Level / Fresher)
+> * **Tracked Skills:** SQL, Power BI, Python, Excel, Tableau, DAX
+>
+> **Project Heimdall is 100% role-agnostic.** If you are a **Software Engineer, DevOps Specialist, ServiceNow Developer, or Product Manager**, you **do NOT need to write new scraping code**. You can customize the entire pipeline in under 60 seconds by editing `config.yaml` or passing CLI flags.
+
+---
+
+## 🌐 Supported Platforms & Zero-Cost Breakdown
+
+Project Heimdall operates on a hybrid scraping architecture designed to be **100% free to run indefinitely**, with an optional high-octane API mode for deeper portal crawling:
+
+| Platform | Engine | Cost & API Key Requirement | Included In |
+| :--- | :--- | :--- | :--- |
+| **LinkedIn** | `JobSpy` | **100% Free** — No account, no API key required | All Modes (`frugal`, `balanced`, `deep`) |
+| **Indeed** | `JobSpy` | **100% Free** — No account, no API key required | All Modes (`frugal`, `balanced`, `deep`) |
+| **Naukri.com** | `Firecrawl Search v2` | **Free Tier** (500 free credits/month; 0 credits in frugal mode) | `balanced`, `deep` modes |
+| **23+ Enterprise ATS**<br>*(Workday, Greenhouse, Lever, etc.)* | `Firecrawl Search v2` | **Free Tier** (500 free credits/month; 0 credits in frugal mode) | `balanced`, `deep` modes |
+| **Glassdoor / Google Jobs** | Configurable via `JobSpy` | Optional toggle in `config.yaml` | Optional |
+
+> [!TIP]
+> **Zero-Cost Operation (`--mode frugal`):**
+> If you don't want to use an API key at all, run:
+> ```bash
+> py main.py --mode frugal
+> ```
+> This runs exclusively on **LinkedIn and Indeed** using direct TLS-fingerprinted scraping with **zero cost, zero tokens, and zero API keys needed**.
 
 ---
 
@@ -112,54 +150,91 @@ Ensure Python 3.10+ (tested and verified up to Python 3.13) is installed.
 > **Note**: If you don't provide an API key, the tool will gracefully skip Firecrawl and still scrape LinkedIn and Indeed for **100% free**!
 
 ### Step 3: Run the Tool!
-- **1-Click Launch**: Just double-click **`run.bat`**.
-  - Automatically verifies dependencies, displays the scraping mode countdown, and generates `Tracker_Latest.xlsx`.
+
+#### 🪟 On Windows:
+- **1-Click Launch**: Double-click **`run.bat`**.
+  - Automatically verifies dependencies, displays the scraping mode countdown, and opens `Tracker_Latest.xlsx`.
 - **Command Line**:
-  ```bash
+  ```cmd
   py -m pip install -r requirements.txt
   py main.py --mode balanced
   ```
 
+#### 🍎 On macOS & Linux:
+Project Heimdall runs natively on macOS (Intel & Apple Silicon) and Linux:
+```bash
+# 1. Clone repository
+git clone https://github.com/harsha71018/Project-Heimdall.git
+cd Project-Heimdall
+
+# 2. Set up virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# 3. Install requirements
+pip install -r requirements.txt
+
+# 4. Launch Heimdall
+python3 main.py --mode balanced
+```
+*Note: The generated `.xlsx` spreadsheets open seamlessly in **Microsoft Excel for Mac**, **Apple Numbers**, or **Google Sheets**.*
+
 ---
 
-## ⚙️ Customizing Your Search (`config.yaml`)
+## ⚙️ How to Customize for Your Own Role & City
 
-Tailor the bot to your specific field, skills, or target city by editing [`config.yaml`](config.yaml):
+You can tailor Project Heimdall to any tech stack, city, or experience level across three tiers:
+
+### Tier 1: Configuration File (`config.yaml`) — *No Python Knowledge Needed*
+Edit [`config.yaml`](config.yaml) to match your exact career path:
 
 ```yaml
 search:
+  # 1. Target Job Titles
   job_titles:
-    - "Data Analyst"
-    - "Data Annotator"
-    - "SQL Developer"
-    - "Power BI Developer"
+    - "Java Developer"
+    - "Backend Engineer"
+    - "Spring Boot Developer"
 
-  location: "Hyderabad"
+  # 2. Target City or "Remote"
+  location: "Bengaluru"
 
-  experience_filter: "0-2 years"
-  max_experience_years: 2      # Strict ceiling: discard jobs requiring > 2 years
+  # 3. Experience Ceiling (in years)
+  # NOTE: Setting max_experience_years > 2 automatically disables the Fresher/Junior Title Gate!
+  max_experience_years: 4
 
-  # 24 hours for daily freshness, 72 hours for weekend catchup
-  hours_old: 24
-
-  results_wanted_per_role: 12
-
-  platforms:
-    - "linkedin"
-    - "indeed"
-
+  # 4. Target Country for Indeed (india, usa, uk, canada, etc.)
   indeed_country: "india"
 
+  # 5. Lookback Window (24 hours for daily sweeps, 72 for weekend catchup)
+  hours_old: 24
+
 skills_filter:
+  # 6. Tech stack keywords (matches are auto-highlighted in Excel Column F)
   target_skills:
-    - "SQL"
-    - "Power BI"
-    - "Python"
-    - "Excel"
-    - "Tableau"
-    - "Data Cleaning"
-    - "ETL"
+    - "Java"
+    - "Spring Boot"
+    - "Microservices"
+    - "Docker"
+    - "Kubernetes"
+    - "AWS"
 ```
+
+### Tier 2: Quick Command-Line Overrides
+Perform instant one-off sweeps for a different role, location, or timeframe without modifying `config.yaml`:
+```bash
+# Windows
+py main.py --role "DevOps Engineer" --location "Pune" --hours 48 --mode frugal
+
+# macOS / Linux
+python3 main.py --role "Python Developer" --location "Remote" --hours 24 --mode balanced
+```
+
+### Tier 3: Advanced Portals & Regional Filters (`scraper.py`)
+For advanced users targeting non-metro cities or proprietary company career portals:
+- **Regional Cities:** If searching Tier-2 cities (e.g. *Kochi, Indore, Coimbatore, Jaipur*), add the city name to `KNOWN_CITIES` in `scraper.py` (Line 67) so Naukri company names are cleanly parsed from URL slugs.
+- **Role Keywords:** If searching niche roles like DevOps or QA, add keywords to `ROLE_KEYWORDS` in `scraper.py` (Line 73) to keep company names pristine.
+- **Custom Enterprise ATS:** Add specific corporate job board domains to `KNOWN_ATS_JOB_PATTERNS` in `scraper.py` (Line 515) to whitelist proprietary company portals.
 
 ---
 
@@ -226,8 +301,9 @@ An audit sheet tracking funnel metrics for transparency:
 
 ---
 
-## ⏰ Automating Daily Sweeps (Windows Task Scheduler)
+## ⏰ Automating Daily Sweeps (Windows Task Scheduler & macOS Cron)
 
+### 🪟 Windows (Task Scheduler)
 You can have Windows automatically run a silent Frugal scan every morning at 8:00 AM so fresh leads are ready when you wake up:
 
 1. Open **Command Prompt** (or PowerShell).
@@ -239,6 +315,19 @@ You can have Windows automatically run a silent Frugal scan every morning at 8:0
 
 - Uses [`run_scheduled.bat`](run_scheduled.bat), which includes automatic 5 MB log rotation, timestamp logging, and unbuffered execution.
 - Runs in **Frugal mode** (costs only 8 credits/day = ~240/month, safely inside the 1,000 free monthly tier).
+
+### 🍎 macOS & Linux (`cron`)
+To schedule Project Heimdall to run automatically at 8:00 AM every day on macOS or Linux:
+
+1. Open your terminal and edit your crontab:
+   ```bash
+   crontab -e
+   ```
+2. Add this single cron entry:
+   ```bash
+   0 8 * * * cd /path/to/Project-Heimdall && ./venv/bin/python3 main.py --mode balanced >> run.log 2>&1
+   ```
+*(Replace `/path/to/Project-Heimdall` with your actual project path).*
 
 ---
 
@@ -269,11 +358,22 @@ Project-Heimdall/
     └── test_nan_url.py
 ```
 
+### 📦 Required Libraries & Tech Stack
+
+| Dependency | Purpose | Why It Was Chosen |
+| :--- | :--- | :--- |
+| `python-jobspy` | Multi-platform TLS scraping across LinkedIn & Indeed | Bypasses basic bot gates without browser overhead or paid APIs. |
+| `pandas` | In-memory tabular deduplication & transformations | High-speed deduplication across candidate dataframes and CSV export. |
+| `openpyxl` | Dynamic Excel dashboard generation | Native conditional formatting, cell dropdown validation, formula protection, and multi-sheet preservation. |
+| `pyyaml` | Configuration parser | Clean, human-readable settings structure for zero-code user customization. |
+| `requests` | Resilient HTTP transport | Handles REST communication with Firecrawl API with jittered backoff. |
+| `python-dotenv` | Local environment security | Zero-leak isolation of private API credentials from git tracking. |
+
 ---
 
 ## 🧪 Testing & Production Verification
 
-The entire codebase is verified by 41 automated unit and acceptance tests covering URL validation, date bounds, ceiling range-blanking, atomic persistence, formula injection protection, Kanban memory persistence, multi-tab sync, archive resurrection prevention, and multi-file sync precedence.
+The entire codebase is verified by 42 automated unit and acceptance tests covering URL validation, date bounds, ceiling range-blanking, atomic persistence, formula injection protection, Kanban memory persistence, multi-tab sync, archive resurrection prevention, and multi-file sync precedence.
 
 To run the complete test suite:
 ```powershell
