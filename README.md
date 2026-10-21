@@ -353,7 +353,7 @@ Project-Heimdall/
 ├── seen_jobs.json            # Persistent URL ledger with 45-day rolling pruning
 ├── applications.json         # Persistent application status & notes ledger
 ├── run_log.csv               # Historical telemetry: timestamp, mode, credits, candidates, drops
-└── tests/                    # Unit and regression test suite (42 passing tests)
+└── tests/                    # Unit and regression test suite (44 passing tests)
     ├── test_phase2.py
     ├── test_refinements.py
     ├── test_experience_order.py
