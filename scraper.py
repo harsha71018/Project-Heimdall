@@ -617,7 +617,7 @@ class MultiPlatformJobScraper:
             m = re.search(r'/job-listings-(.+?)-\d{10,14}$', path)
             if m:
                 slug = m.group(1).lower()
-                slug = re.sub(r'-\d+-to-\d+-years?', '', slug)
+                slug = re.sub(r'-\d+(?:-to-|-)\d+-years?', '', slug)
                 tokens = slug.split('-')
 
                 start_idx = 0
@@ -642,8 +642,11 @@ class MultiPlatformJobScraper:
             cleaned = re.sub(r'\s*-\s*\d+\s*(?:to|-)\s*\d+\s*years?.*$', '', raw_title, flags=re.I).strip()
             cleaned = re.sub(r'\s*[-|]\s*Naukri\.com.*$', '', cleaned, flags=re.I).strip()
             parts = [p.strip() for p in cleaned.split(' - ')]
+            fresher_markers = ("fresher", "intern", "internship", "junior", "trainee", "entry level")
             if len(parts) >= 2 and parts[0].lower() in ["fresher", "intern", "junior", "sr"]:
                 role = f"{parts[0]} {parts[1]}"
+            elif len(parts) >= 2 and parts[1].lower() in fresher_markers:
+                role = f"{parts[0]} ({parts[1]})"
             elif parts:
                 role = parts[0]
 
@@ -694,7 +697,7 @@ class MultiPlatformJobScraper:
             if not self._matches_host(host, "naukri.com"):
                 return None
             path = parsed.path.rstrip('/')
-            m = re.search(r'-(\d{1,2})-to-(\d{1,2})-years?-', path.lower())
+            m = re.search(r'-(\d{1,2})(?:-to-|-)(\d{1,2})-years?-', path.lower())
             if m:
                 return f"{m.group(1)} - {m.group(2)} Years"
         except Exception:
