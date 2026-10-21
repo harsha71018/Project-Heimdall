@@ -12,47 +12,12 @@ from urllib.parse import urlsplit, urlunsplit, parse_qs, parse_qsl, urlencode
 from dotenv import load_dotenv
 from jobspy import scrape_jobs
 from extractor import JobRequirementExtractor
+from url_utils import canonicalize_job_url, IDENTITY_QUERY_PARAMS
 
 # Load environment variables (.env)
 load_dotenv()
 
 logger = logging.getLogger("JobScraper")
-
-IDENTITY_QUERY_PARAMS = {
-    "jk", "jl", "id", "jobreferencecode", "jobid", "page", "job"
-}
-
-
-def canonicalize_job_url(url: str) -> str:
-    """
-    Normalizes a job URL while preserving platform-required identity query parameters
-    (Indeed ?jk=, Glassdoor ?jl=, BambooHR/Accenture ?id=, Infosys ?jobReferenceCode=, etc.).
-    """
-    if not url or not isinstance(url, str):
-        return ""
-    raw = url.strip()
-    if not raw.lower().startswith(("http://", "https://")):
-        return ""
-    try:
-        parsed = urlsplit(raw)
-        if not parsed.scheme or not parsed.hostname:
-            return ""
-        kept_params = [
-            (k.lower(), v.strip().lower())
-            for k, v in parse_qsl(parsed.query, keep_blank_values=False)
-            if k.lower() in IDENTITY_QUERY_PARAMS
-        ]
-        kept_params.sort()
-        clean_path = parsed.path.rstrip("/").lower()
-        return urlunsplit((
-            parsed.scheme.lower(),
-            parsed.hostname.lower(),
-            clean_path,
-            urlencode(kept_params),
-            ""
-        ))
-    except Exception:
-        return re.sub(r'\?.*$', '', raw).strip().lower()
 
 
 class MultiPlatformJobScraper:

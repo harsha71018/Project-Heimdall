@@ -12,43 +12,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils import get_column_letter
 import pandas as pd
-
-# Query parameters that uniquely identify a job posting on aggregator/ATS platforms
-IDENTITY_QUERY_PARAMS = {
-    "jk", "jl", "id", "jobreferencecode", "jobid", "page", "job"
-}
-
-
-def canonicalize_job_url(url: str) -> str:
-    """
-    Normalizes a job URL for ledger and deduplication lookups while preserving
-    platform-required identity query parameters (e.g., Indeed ?jk=, Glassdoor ?jl=, ATS IDs).
-    """
-    if not url or not isinstance(url, str):
-        return ""
-    raw = url.strip()
-    if not raw.lower().startswith(("http://", "https://")):
-        return ""
-    try:
-        parsed = urlsplit(raw)
-        if not parsed.scheme or not parsed.hostname:
-            return ""
-        kept_params = [
-            (k.lower(), v.strip().lower())
-            for k, v in parse_qsl(parsed.query, keep_blank_values=False)
-            if k.lower() in IDENTITY_QUERY_PARAMS
-        ]
-        kept_params.sort()
-        clean_path = parsed.path.rstrip("/").lower()
-        return urlunsplit((
-            parsed.scheme.lower(),
-            parsed.hostname.lower(),
-            clean_path,
-            urlencode(kept_params),
-            ""
-        ))
-    except Exception:
-        return re.sub(r'\?.*$', '', raw).strip().lower()
+from url_utils import canonicalize_job_url, IDENTITY_QUERY_PARAMS
 
 
 class ExcelDashboardGenerator:
