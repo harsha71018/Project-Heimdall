@@ -46,6 +46,11 @@ applications*.json
 .backups/
 *.zip
 *.pdf
+# Personal resume exports — never publish (contain contact details)
+*.html
+heimdall.lock
+heimdall_bug_repro.py
+PROJECT_HEIMDALL_ANALYSIS.md
 *_backup.*
 /audit_phase1/
 *audit*.md
