@@ -42,18 +42,21 @@ modes:
     search_limit_per_role: 10
     deep_scrape: false
     timeout: 20
+    jobspy_results: 8
     description: "8 credits total: Fast SERP snippets (4 roles x 2 search credits)"
 
   balanced:
     search_limit_per_role: 4
     deep_scrape: true
     timeout: 60
+    jobspy_results: 12
     description: "24 credits total: Full markdown on top 4 listings per role (4 roles x (2 search + 4 scrape))"
 
   exhaustive:
     search_limit_per_role: 10
     deep_scrape: true
     timeout: 60
+    jobspy_results: 14
     description: "48 credits total: Full markdown on top 10 listings per role (4 roles x (2 search + 10 scrape))"
 
 firecrawl:

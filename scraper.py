@@ -17,7 +17,6 @@ from url_utils import canonicalize_job_url, IDENTITY_QUERY_PARAMS
 # Load environment variables (.env)
 load_dotenv()
 
-logger = logging.getLogger("JobScraper")
 
 
 class MultiPlatformJobScraper:
@@ -101,6 +100,7 @@ class MultiPlatformJobScraper:
             "unparseable_naukri_dates": 0,
             "dropped_senior_title": 0,
             "dropped_experience_ceiling": 0,
+            "dropped_unlisted_host": 0,
         }
 
         # Persistent seen jobs ledger (45-day retention to exceed Naukri window)
@@ -137,7 +137,7 @@ class MultiPlatformJobScraper:
         except Exception:
             return {}
 
-    def _save_seen_jobs(self) -> None:
+    def save_seen_jobs(self) -> None:
         """Atomically saves updated seen job URLs to persistent JSON file using tempfile + os.replace."""
         abs_target = os.path.abspath(self.seen_jobs_file)
         parent_dir = os.path.dirname(abs_target)
@@ -160,6 +160,9 @@ class MultiPlatformJobScraper:
                     os.remove(tmp_path)
                 except OSError:
                     pass
+
+    # Backward compatibility alias
+    _save_seen_jobs = save_seen_jobs
 
     def get_remaining_credits(self) -> Optional[int]:
         """
@@ -198,7 +201,11 @@ class MultiPlatformJobScraper:
         job_titles = self.config.get("job_titles", ["Data Analyst"])
         location = self.config.get("location", "Hyderabad")
         platforms = self.config.get("platforms", ["linkedin", "indeed", "glassdoor", "zip_recruiter"])
-        results_wanted = self.config.get("results_wanted_per_role", 20)
+        mode_settings = self.modes_config.get(self.active_mode, {})
+        results_wanted = int(mode_settings.get(
+            "jobspy_results",
+            self.config.get("results_wanted_per_role", 12)
+        ))
         hours_old = self.config.get("hours_old", 72)
         country_indeed = self.config.get("indeed_country", "india")
 
@@ -223,6 +230,7 @@ class MultiPlatformJobScraper:
         self.last_run_stats["unparseable_naukri_dates"] = 0
         self.last_run_stats["dropped_senior_title"] = 0
         self.last_run_stats["dropped_experience_ceiling"] = 0
+        self.last_run_stats["dropped_unlisted_host"] = 0
 
         all_results = []
 
@@ -262,6 +270,7 @@ class MultiPlatformJobScraper:
                 if jobs_df is not None and not jobs_df.empty:
                     self.last_run_stats["jobspy_candidates"] += len(jobs_df)
                     valid_mask = jobs_df.apply(self._row_has_valid_direct_url, axis=1)
+                    self.last_run_stats["dropped_unlisted_host"] = self.last_run_stats.get("dropped_unlisted_host", 0) + int((~valid_mask).sum())
                     clean_df = jobs_df[valid_mask].copy()
                     if not clean_df.empty:
                         clean_df["search_query"] = title
@@ -389,6 +398,7 @@ class MultiPlatformJobScraper:
                 desc = item.get("description", "")
 
                 if not self._is_direct_job_url(url):
+                    self.last_run_stats["dropped_unlisted_host"] = self.last_run_stats.get("dropped_unlisted_host", 0) + 1
                     continue
 
                 if "naukri.com" in url:

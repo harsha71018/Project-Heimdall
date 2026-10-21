@@ -543,5 +543,20 @@ class TestRunLogMigrationAndSafety(unittest.TestCase):
         self.assertIn(os.path.abspath(self.log_file), failure_msg)
 
 
+    def test_load_config_empty_file_returns_dict(self):
+        """Empty 0-byte config.yaml must return {} instead of None to prevent AttributeError."""
+        import tempfile
+        from main import load_config
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            temp_path = f.name
+        try:
+            cfg = load_config(temp_path)
+            self.assertIsInstance(cfg, dict)
+            self.assertEqual(cfg, {})
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+
 if __name__ == "__main__":
     unittest.main()

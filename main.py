@@ -152,20 +152,58 @@ def load_config(config_path: str = "config.yaml") -> dict:
             }
         }
     with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        return yaml.safe_load(f) or {}
+
+
+LOCK_FILE = "heimdall.lock"
+MAX_LOCK_AGE_MINUTES = 30
+
+
+def acquire_run_lock(lock_file: str = LOCK_FILE) -> bool:
+    """Prevents two Heimdall runs (e.g. Task Scheduler + manual) from racing."""
+    try:
+        if os.path.exists(lock_file):
+            age_min = (datetime.now() - datetime.fromtimestamp(os.path.getmtime(lock_file))).total_seconds() / 60
+            if age_min >= MAX_LOCK_AGE_MINUTES:
+                try:
+                    os.remove(lock_file)
+                except OSError:
+                    pass
+            else:
+                return False
+        fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(datetime.now().isoformat())
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        return True  # never block a run because of the lock itself
+
+
+def release_run_lock(lock_file: str = LOCK_FILE) -> None:
+    """Releases the run lock file."""
+    try:
+        if os.path.exists(lock_file):
+            os.remove(lock_file)
+    except OSError:
+        pass
 
 
 def parse_args():
     """Parses command-line arguments."""
     parser = argparse.ArgumentParser(description="Automated Multi-Platform Job Hunter & Excel Generator")
-    parser.add_argument("--mode", type=str, choices=["frugal", "balanced", "exhaustive"], help="Scraping intensity mode")
+    parser.add_argument("--mode", type=str, choices=["frugal", "balanced", "exhaustive", "deep"], help="Scraping intensity mode")
     parser.add_argument("--role", type=str, help="Specific job role to search for (overrides config)")
     parser.add_argument("--location", type=str, help="Location to search for (overrides config)")
     parser.add_argument("--hours", type=int, help="Max job age in hours (e.g. 24, 72)")
     parser.add_argument("--output", type=str, help="Output Excel filename")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--dry-run", action="store_true", help="Validate configuration and simulate run without scraping")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.mode == "deep":
+        args.mode = "exhaustive"
+    return args
 
 
 def main():
@@ -212,116 +250,123 @@ def main():
         print("=" * 70)
         return
 
-    # Pre-flight Credit Check
-    start_credits = scraper.get_remaining_credits()
-    if start_credits is not None:
-        print(f"[*] Firecrawl Live Balance : {start_credits:,} credits available.")
-        if active_mode == "exhaustive" and start_credits < 50:
-            print("[!] Warning: Less than 50 credits remaining. Consider using 'balanced' or 'frugal' mode.")
-    else:
-        print("[*] Firecrawl Balance Check: No active key or endpoint unreachable (continuing gracefully).")
+    if not acquire_run_lock():
+        print(f"[!] Another instance is already running (lock: {LOCK_FILE}). Exiting.")
+        sys.exit(2)
 
-    # 1. Scrape and Enrich Jobs
-    enriched_jobs_df = scraper.scrape_all_roles()
-
-    # Post-flight Credit Check & Delta Computation
-    end_credits = scraper.get_remaining_credits()
-    if isinstance(start_credits, int) and isinstance(end_credits, int):
-        credits_used = max(0, start_credits - end_credits)
-        credit_audit_str = f"{start_credits:,} before -> {end_credits:,} after ({credits_used} credits used this run)"
-    else:
-        credits_used = "unknown"
-        credit_audit_str = "Delta calculation unavailable"
-
-    # Read per-engine and funnel stats
-    stats = scraper.last_run_stats
-    fc_candidates = stats.get("fc_candidates", 0)
-    fc_markdown_hits = stats.get("fc_markdown_hits", 0)
-    fc_retained = stats.get("fc_retained", 0)
-    jobspy_candidates = stats.get("jobspy_candidates", 0)
-    jobspy_retained = stats.get("jobspy_retained", 0)
-    dropped_stale_naukri = stats.get("dropped_stale_naukri", 0)
-    dropped_future_naukri = stats.get("dropped_future_naukri", 0)
-    unparseable_naukri_dates = stats.get("unparseable_naukri_dates", 0)
-    dropped_senior_title = stats.get("dropped_senior_title", 0)
-    dropped_experience_ceiling = stats.get("dropped_experience_ceiling", 0)
-    total_unique = len(enriched_jobs_df)
-
-    log_file = "run_log.csv"
-    row_data = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "mode": active_mode,
-        "credits_used": credits_used,
-        "fc_candidates": fc_candidates,
-        "fc_markdown_hits": fc_markdown_hits,
-        "fc_retained": fc_retained,
-        "jobspy_candidates": jobspy_candidates,
-        "jobspy_retained": jobspy_retained,
-        "total_unique_jobs": total_unique,
-        "dropped_stale_naukri": dropped_stale_naukri,
-        "dropped_future_naukri": dropped_future_naukri,
-        "unparseable_naukri_dates": unparseable_naukri_dates,
-        "dropped_senior_title": dropped_senior_title,
-        "dropped_experience_ceiling": dropped_experience_ceiling,
-    }
-
-    log_updated = migrate_and_append_run_log(log_file, row_data)
-    log_status_str = format_run_log_status(log_updated, log_file)
-
-    # Instantiate generator early so applications.json syncs even on 0-job runs
-    output_filename = args.output if args.output else None
-    dashboard_gen = ExcelDashboardGenerator(config)
-
-    if enriched_jobs_df.empty:
-        total_raw_candidates = fc_candidates + jobspy_candidates
-        fc_errors = stats.get("fc_errors", 0)
-        jobspy_errors = stats.get("jobspy_errors", 0)
-        use_firecrawl = config.get("firecrawl", {}).get("enabled", True) and bool(os.getenv("FIRECRAWL_API_KEY"))
-        all_sources_failed = (
-            total_raw_candidates == 0 and
-            jobspy_errors > 0 and
-            (not use_firecrawl or fc_errors > 0)
-        )
-
-        print("\n" + "=" * 70)
-        if all_sources_failed:
-            print("[!] ERROR: All attempted job scraping sources failed due to network or API connection errors.")
-            print("    No platforms could be reached. Please check your internet connection or credentials.")
+    try:
+        # Pre-flight Credit Check
+        start_credits = scraper.get_remaining_credits()
+        if start_credits is not None:
+            print(f"[*] Firecrawl Live Balance : {start_credits:,} credits available.")
+            if active_mode == "exhaustive" and start_credits < 50:
+                print("[!] Warning: Less than 50 credits remaining. Consider using 'balanced' or 'frugal' mode.")
         else:
-            print("[!] No jobs matching criteria were returned today (zero new leads or all filtered).")
-        print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
+            print("[*] Firecrawl Balance Check: No active key or endpoint unreachable (continuing gracefully).")
+
+        # 1. Scrape and Enrich Jobs
+        enriched_jobs_df = scraper.scrape_all_roles()
+
+        # Post-flight Credit Check & Delta Computation
+        end_credits = scraper.get_remaining_credits()
+        if isinstance(start_credits, int) and isinstance(end_credits, int):
+            credits_used = max(0, start_credits - end_credits)
+            credit_audit_str = f"{start_credits:,} before -> {end_credits:,} after ({credits_used} credits used this run)"
+        else:
+            credits_used = "unknown"
+            credit_audit_str = "Delta calculation unavailable"
+
+        # Read per-engine and funnel stats
+        stats = scraper.last_run_stats
+        fc_candidates = stats.get("fc_candidates", 0)
+        fc_markdown_hits = stats.get("fc_markdown_hits", 0)
+        fc_retained = stats.get("fc_retained", 0)
+        jobspy_candidates = stats.get("jobspy_candidates", 0)
+        jobspy_retained = stats.get("jobspy_retained", 0)
+        dropped_stale_naukri = stats.get("dropped_stale_naukri", 0)
+        dropped_future_naukri = stats.get("dropped_future_naukri", 0)
+        unparseable_naukri_dates = stats.get("unparseable_naukri_dates", 0)
+        dropped_senior_title = stats.get("dropped_senior_title", 0)
+        dropped_experience_ceiling = stats.get("dropped_experience_ceiling", 0)
+        total_unique = len(enriched_jobs_df)
+
+        log_file = "run_log.csv"
+        row_data = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "mode": active_mode,
+            "credits_used": credits_used,
+            "fc_candidates": fc_candidates,
+            "fc_markdown_hits": fc_markdown_hits,
+            "fc_retained": fc_retained,
+            "jobspy_candidates": jobspy_candidates,
+            "jobspy_retained": jobspy_retained,
+            "total_unique_jobs": total_unique,
+            "dropped_stale_naukri": dropped_stale_naukri,
+            "dropped_future_naukri": dropped_future_naukri,
+            "unparseable_naukri_dates": unparseable_naukri_dates,
+            "dropped_senior_title": dropped_senior_title,
+            "dropped_experience_ceiling": dropped_experience_ceiling,
+        }
+
+        log_updated = migrate_and_append_run_log(log_file, row_data)
+        log_status_str = format_run_log_status(log_updated, log_file)
+
+        # Instantiate generator early so applications.json syncs even on 0-job runs
+        output_filename = args.output if args.output else None
+        dashboard_gen = ExcelDashboardGenerator(config)
+
+        if enriched_jobs_df.empty:
+            total_raw_candidates = fc_candidates + jobspy_candidates
+            fc_errors = stats.get("fc_errors", 0)
+            jobspy_errors = stats.get("jobspy_errors", 0)
+            use_firecrawl = config.get("firecrawl", {}).get("enabled", True) and bool(os.getenv("FIRECRAWL_API_KEY"))
+            all_sources_failed = (
+                total_raw_candidates == 0 and
+                jobspy_errors > 0 and
+                (not use_firecrawl or fc_errors > 0)
+            )
+
+            print("\n" + "=" * 70)
+            if all_sources_failed:
+                print("[!] ERROR: All attempted job scraping sources failed due to network or API connection errors.")
+                print("    No platforms could be reached. Please check your internet connection or credentials.")
+            else:
+                print("[!] No jobs matching criteria were returned today (zero new leads or all filtered).")
+            print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {stats.get('dropped_unlisted_host', 0)} unlisted-host URLs, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
+            print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")
+            print(f"    - JobSpy (LinkedIn / Indeed)    : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
+            print(f"[+] Firecrawl Credit Audit              : {credit_audit_str}")
+            print(log_status_str)
+            print("=" * 70)
+            if all_sources_failed:
+                sys.exit(1)
+            sys.exit(0)
+
+        # 2. Build Formatted Excel Tracker
+        generated_file = dashboard_gen.generate(enriched_jobs_df, output_path=output_filename, run_stats=row_data)
+
+        # 3. Commit seen jobs ledger only after Excel write succeeds
+        scraper.save_seen_jobs()
+
+        # 4. Print Summary Box
+        print("\n" + "=" * 70)
+        print(f"[+] SUCCESS! Total Active Opportunities Aggregated: {total_unique}")
         print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")
         print(f"    - JobSpy (LinkedIn / Indeed)    : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
+        print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {stats.get('dropped_unlisted_host', 0)} unlisted-host URLs, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
         print(f"[+] Firecrawl Credit Audit              : {credit_audit_str}")
+        print(f"[+] Output File                         : {os.path.abspath(generated_file)}")
         print(log_status_str)
         print("=" * 70)
-        if all_sources_failed:
-            sys.exit(1)
-        sys.exit(0)
+        print("\nNext Steps:")
+        print(" 1. Open the generated Excel file.")
+        print(" 2. Review the top extracted skills in column F.")
+        print(" 3. Click the 'Apply Now' button in column J to jump straight to the post/careers page.")
+        print(" 4. Update the 'Application Status' dropdown as you apply in column K.")
+        print("=" * 70)
 
-    # 2. Build Formatted Excel Tracker
-    generated_file = dashboard_gen.generate(enriched_jobs_df, output_path=output_filename, run_stats=row_data)
-
-    # 3. Commit seen jobs ledger only after Excel write succeeds
-    scraper._save_seen_jobs()
-
-    # 4. Print Summary Box
-    print("\n" + "=" * 70)
-    print(f"[+] SUCCESS! Total Active Opportunities Aggregated: {total_unique}")
-    print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")
-    print(f"    - JobSpy (LinkedIn / Indeed)    : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
-    print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
-    print(f"[+] Firecrawl Credit Audit              : {credit_audit_str}")
-    print(f"[+] Output File                         : {os.path.abspath(generated_file)}")
-    print(log_status_str)
-    print("=" * 70)
-    print("\nNext Steps:")
-    print(" 1. Open the generated Excel file.")
-    print(" 2. Review the top extracted skills in column F.")
-    print(" 3. Click the 'Apply Now' button in column J to jump straight to the post/careers page.")
-    print(" 4. Update the 'Application Status' dropdown as you apply in column K.")
-    print("=" * 70)
-
+    finally:
+        release_run_lock()
 
 if __name__ == "__main__":
     main()
