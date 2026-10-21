@@ -46,11 +46,13 @@ Project Heimdall operates on a hybrid scraping architecture designed to be **100
 
 | Platform | Engine | Cost & API Key Requirement | Included In |
 | :--- | :--- | :--- | :--- |
-| **LinkedIn** | `JobSpy` | **100% Free** — No account, no API key required | All Modes (`frugal`, `balanced`, `deep`) |
-| **Indeed** | `JobSpy` | **100% Free** — No account, no API key required | All Modes (`frugal`, `balanced`, `deep`) |
-| **Naukri.com** | `Firecrawl Search v2` | **Free Tier** (500 free credits/month; 0 credits in frugal mode) | `balanced`, `deep` modes |
-| **23+ Enterprise ATS**<br>*(Workday, Greenhouse, Lever, etc.)* | `Firecrawl Search v2` | **Free Tier** (500 free credits/month; 0 credits in frugal mode) | `balanced`, `deep` modes |
-| **Glassdoor / Google Jobs** | Configurable via `JobSpy` | Optional toggle in `config.yaml` | Optional |
+| **LinkedIn** | `JobSpy` | **100% Free** — No account, no API key required | All Modes (`frugal`, `balanced`, `exhaustive`) |
+| **Indeed** | `JobSpy` | **100% Free** — No account, no API key required | All Modes (`frugal`, `balanced`, `exhaustive`) |
+| **Naukri.com** | `Firecrawl Search v2` | **Free Tier** (500 free credits/month; 0 credits in frugal mode) | `balanced`, `exhaustive` modes |
+| **Glassdoor / ZipRecruiter** | `JobSpy` | **100% Free** — Optional toggle via `search.platforms` in `config.yaml` | Optional |
+
+> [!NOTE]
+> **Enterprise ATS Direct Links:** Direct application links (Workday, Greenhouse, Lever, Taleo, etc.) are recognized and validated when surfaced by JobSpy; Firecrawl itself targets Naukri listings.
 
 > [!TIP]
 > **Zero-Cost Operation (`--mode frugal`):**
@@ -105,7 +107,7 @@ flowchart TD
 
 ## 🤝 How to Share This Tool with Friends
 
-The pre-built **`Project-Heimdall.zip`** in the root directory contains the clean, universal core Data Analyst pipeline.
+The distributable **`Project-Heimdall.zip`** can be built locally (gitignored to keep the repo lightweight) containing the clean, universal core Data Analyst pipeline.
 
 When sharing this project or creating a custom package for a friend, follow these privacy rules:
 
@@ -142,7 +144,7 @@ Ensure Python 3.10+ (tested and verified up to Python 3.13) is installed.
 
 ### Step 2: Set Up API Keys (Optional but Recommended)
 1. In the project folder, make a copy of `.env.example` and rename it to `.env`.
-2. Get a free API key with 1,000 free credits from [Firecrawl.dev](https://www.firecrawl.dev).
+2. Get a free API key with 500 free credits/month from [Firecrawl.dev](https://www.firecrawl.dev).
 3. Paste the key inside `.env`:
    ```env
    FIRECRAWL_API_KEY=fc-YOUR_API_KEY_HERE
@@ -153,7 +155,7 @@ Ensure Python 3.10+ (tested and verified up to Python 3.13) is installed.
 
 #### 🪟 On Windows:
 - **1-Click Launch**: Double-click **`run.bat`**.
-  - Automatically verifies dependencies, displays the scraping mode countdown, and opens `Tracker_Latest.xlsx`.
+  - Automatically verifies dependencies, displays the scraping mode countdown, and writes `Tracker_Latest.xlsx`.
 - **Command Line**:
   ```cmd
   py -m pip install -r requirements.txt
@@ -232,9 +234,9 @@ python3 main.py --role "Python Developer" --location "Remote" --hours 24 --mode 
 
 ### Tier 3: Advanced Portals & Regional Filters (`scraper.py`)
 For advanced users targeting non-metro cities or proprietary company career portals:
-- **Regional Cities:** If searching Tier-2 cities (e.g. *Kochi, Indore, Coimbatore, Jaipur*), add the city name to `KNOWN_CITIES` in `scraper.py` (Line 67) so Naukri company names are cleanly parsed from URL slugs.
-- **Role Keywords:** If searching niche roles like DevOps or QA, add keywords to `ROLE_KEYWORDS` in `scraper.py` (Line 73) to keep company names pristine.
-- **Custom Enterprise ATS:** Add specific corporate job board domains to `KNOWN_ATS_JOB_PATTERNS` in `scraper.py` (Line 515) to whitelist proprietary company portals.
+- **Regional Cities:** If searching Tier-2 cities (e.g. *Kochi, Indore, Coimbatore, Jaipur*), add the city name to `KNOWN_CITIES` in `scraper.py` (Line 69) so Naukri company names are cleanly parsed from URL slugs.
+- **Role Keywords:** If searching niche roles like DevOps or QA, add keywords to `ROLE_KEYWORDS` in `scraper.py` (Line 75) to keep company names pristine.
+- **Custom Enterprise ATS:** Add specific corporate job board domains to `KNOWN_ATS_JOB_PATTERNS` in `scraper.py` (Line 480) to whitelist proprietary company portals.
 
 ---
 
@@ -366,7 +368,7 @@ Project-Heimdall/
 | `pandas` | In-memory tabular deduplication & transformations | High-speed deduplication across candidate dataframes and CSV export. |
 | `openpyxl` | Dynamic Excel dashboard generation | Native conditional formatting, cell dropdown validation, formula protection, and multi-sheet preservation. |
 | `pyyaml` | Configuration parser | Clean, human-readable settings structure for zero-code user customization. |
-| `requests` | Resilient HTTP transport | Handles REST communication with Firecrawl API with jittered backoff. |
+| `requests` | Resilient HTTP transport | Handles REST communication with Firecrawl API with a single retry honouring the API's Retry-After header. |
 | `python-dotenv` | Local environment security | Zero-leak isolation of private API credentials from git tracking. |
 
 ---
@@ -400,3 +402,13 @@ py -m unittest discover tests -v
 1. **Apply within the first 24 hours**: Filter for `🟢 NEW` every morning. The earliest applicants get reviewed first.
 2. **Use Autofill Extensions**: Install tools like *Simplify Copilot* in Chrome/Edge. When you click **"Apply Now"** from Excel, it will pre-fill complex Workday/Taleo applications in seconds.
 3. **Follow-Up**: Note the HR or hiring manager in Column L (`Referral / Notes`) and reach out on LinkedIn.
+
+---
+
+## ⚖️ License & Disclaimer
+
+### License
+This project is licensed under the [MIT License](LICENSE) - see the LICENSE file for details.
+
+### Disclaimer
+Project Heimdall scrapes publicly reachable job pages for personal job-search use. LinkedIn and Indeed prohibit automated scraping in their Terms of Service and may block your IP — use it at your own risk and keep the request rate low. When the Firecrawl engine is enabled, your search queries (role + city) are sent to Firecrawl's cloud API; JobSpy traffic stays on your machine.
