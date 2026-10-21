@@ -1,7 +1,7 @@
 # 🛡️ Project Heimdall: Automated Multi-Platform Job Hunter & Application Tracker
 
 ![Python 3.10-3.13](https://img.shields.io/badge/Python-3.10%E2%80%933.13-blue?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-42%20Passing-brightgreen)
+[![Tests](https://github.com/harsha71018/Project-Heimdall/actions/workflows/tests.yml/badge.svg)](https://github.com/harsha71018/Project-Heimdall/actions/workflows/tests.yml)
 ![Platforms](https://img.shields.io/badge/Platforms-LinkedIn%20%7C%20Indeed%20%7C%20Naukri-0A66C2)
 
 > **Project Heimdall** acts as the all-seeing gatekeeper for your job hunt—scanning across LinkedIn, Indeed, Naukri, and corporate ATS portals, blocking senior/expired roles at the gate, and syncing verified 0–2 YOE leads into a bi-directional 3-tab Excel command center.
@@ -375,7 +375,7 @@ Project-Heimdall/
 
 ## 🧪 Testing & Production Verification
 
-The entire codebase is verified by 42 automated unit and acceptance tests covering URL validation, date bounds, ceiling range-blanking, atomic persistence, formula injection protection, Kanban memory persistence, multi-tab sync, archive resurrection prevention, and multi-file sync precedence.
+The entire codebase is verified by 44 automated unit and acceptance tests covering URL validation, date bounds, ceiling range-blanking, atomic persistence, formula injection protection, hidden provenance stamps, Kanban memory persistence, multi-tab sync, archive resurrection prevention, and multi-file sync precedence.
 
 To run the complete test suite:
 ```powershell
