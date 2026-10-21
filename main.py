@@ -19,9 +19,28 @@ from excel_generator import ExcelDashboardGenerator
 
 RUN_LOG_HEADERS = [
     "timestamp", "mode", "credits_used", "fc_candidates", "fc_markdown_hits",
-    "fc_retained", "jobspy_retained", "total_unique_jobs",
+    "fc_retained", "jobspy_candidates", "jobspy_retained", "total_unique_jobs",
     "dropped_stale_naukri", "dropped_future_naukri", "unparseable_naukri_dates",
     "dropped_senior_title", "dropped_experience_ceiling"
+]
+
+# Schemas shipped before the current header list. Existing run_log.csv files MUST
+# stay recognised or the run log silently stops appending for existing users.
+LEGACY_RUN_LOG_HEADERS = [
+    [  # v1 - 7 columns
+        "timestamp", "mode", "credits_used", "fc_candidates",
+        "fc_retained", "jobspy_retained", "total_unique_jobs"
+    ],
+    [  # v2 - 8 columns (added fc_markdown_hits)
+        "timestamp", "mode", "credits_used", "fc_candidates", "fc_markdown_hits",
+        "fc_retained", "jobspy_retained", "total_unique_jobs"
+    ],
+    [  # v3 - 13 columns (shipped until jobspy_candidates was added)
+        "timestamp", "mode", "credits_used", "fc_candidates", "fc_markdown_hits",
+        "fc_retained", "jobspy_retained", "total_unique_jobs",
+        "dropped_stale_naukri", "dropped_future_naukri", "unparseable_naukri_dates",
+        "dropped_senior_title", "dropped_experience_ceiling"
+    ],
 ]
 
 
@@ -67,16 +86,7 @@ def migrate_and_append_run_log(log_file: str, row_data: dict) -> bool:
                 writer.writerow([row_data.get(h, "") for h in RUN_LOG_HEADERS])
             return True
 
-        recognized_8 = [
-            "timestamp", "mode", "credits_used", "fc_candidates", "fc_markdown_hits",
-            "fc_retained", "jobspy_retained", "total_unique_jobs"
-        ]
-        recognized_7 = [
-            "timestamp", "mode", "credits_used", "fc_candidates",
-            "fc_retained", "jobspy_retained", "total_unique_jobs"
-        ]
-
-        if first_line != recognized_8 and first_line != recognized_7:
+        if not any(first_line == legacy for legacy in LEGACY_RUN_LOG_HEADERS):
             print(f"[!] Warning: Unrecognized {log_file} schema. Leaving file untouched and skipping log append.")
             return False
 
@@ -84,21 +94,11 @@ def migrate_and_append_run_log(log_file: str, row_data: dict) -> bool:
         with open(log_file, "r", encoding="utf-8") as f:
             dict_reader = csv.DictReader(f)
             for r in dict_reader:
-                new_row = [
-                    r.get("timestamp", ""),
-                    r.get("mode", ""),
-                    r.get("credits_used", ""),
-                    r.get("fc_candidates", ""),
-                    r.get("fc_markdown_hits") if r.get("fc_markdown_hits") is not None else "N/A",
-                    r.get("fc_retained", ""),
-                    r.get("jobspy_retained", ""),
-                    r.get("total_unique_jobs", ""),
-                    "N/A",  # dropped_stale_naukri
-                    "N/A",  # dropped_future_naukri
-                    "N/A",  # unparseable_naukri_dates
-                    "N/A",  # dropped_senior_title
-                    "N/A",  # dropped_experience_ceiling
-                ]
+                # Columns absent from a legacy schema become "N/A".
+                new_row = []
+                for h in RUN_LOG_HEADERS:
+                    val = r.get(h)
+                    new_row.append("N/A" if val is None else val)
                 migrated_rows.append(new_row)
 
         temp_file = f"{log_file}.{os.getpid()}_{uuid.uuid4().hex[:8]}.tmp"

@@ -454,7 +454,7 @@ class TestRunLogMigrationAndSafety(unittest.TestCase):
         self.assertEqual(len(reader), 3)  # header + migrated row + new row
         migrated = reader[1]
         self.assertEqual(migrated[4], "N/A")  # fc_markdown_hits
-        self.assertEqual(migrated[8:], ["N/A", "N/A", "N/A", "N/A", "N/A"])
+        self.assertEqual(migrated[9:], ["N/A", "N/A", "N/A", "N/A", "N/A"])
 
     def test_legacy_8_column_migration(self):
         headers_8 = ["timestamp", "mode", "credits_used", "fc_candidates", "fc_markdown_hits", "fc_retained", "jobspy_retained", "total_unique_jobs"]
@@ -490,7 +490,7 @@ class TestRunLogMigrationAndSafety(unittest.TestCase):
         self.assertEqual(len(reader), 3)
         migrated = reader[1]
         self.assertEqual(migrated[4], "3")  # preserved
-        self.assertEqual(migrated[8:], ["N/A", "N/A", "N/A", "N/A", "N/A"])
+        self.assertEqual(migrated[9:], ["N/A", "N/A", "N/A", "N/A", "N/A"])
 
     def test_unrecognized_schema_remains_byte_identical(self):
         unrecognized_content = b"unknown_header_a,unknown_header_b,extra_col\nval1,val2,val3\nval4,val5,val6\n"
