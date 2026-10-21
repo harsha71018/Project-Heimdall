@@ -302,6 +302,17 @@ class MultiPlatformJobScraper:
 
         return enriched_df
 
+    @staticmethod
+    def _tbs_for_hours(hours: int) -> str:
+        """Maps a lookback window onto Firecrawl/Google 'tbs' freshness tokens."""
+        if hours <= 24:
+            return "qdr:d"
+        if hours <= 24 * 7:
+            return "qdr:w"
+        if hours <= 24 * 30:
+            return "qdr:m"
+        return "qdr:y"
+
     def _scrape_with_firecrawl(self, title: str, location: str, limit: int = 4) -> pd.DataFrame:
         """
         Uses Firecrawl Search v2 API with optional full markdown deep scraping.
@@ -314,10 +325,11 @@ class MultiPlatformJobScraper:
 
         query = f'"{title}" "{location}" site:naukri.com/job-listings'
 
+        hours_old = int(self.config.get("hours_old", 24) or 24)
         payload: Dict[str, Any] = {
             "query": query,
             "limit": limit,
-            "tbs": "qdr:w"
+            "tbs": self._tbs_for_hours(hours_old)
         }
 
         if self.deep_scrape:
