@@ -811,6 +811,39 @@ class TestPhase2Acceptance(unittest.TestCase):
         )
 
 
+    def test_human_edit_in_dated_archive_survives_next_run(self):
+        """Human edits inside a dated leads/ archive must not be reverted by Tracker_Latest."""
+        import glob
+        target_url = "https://www.naukri.com/job-listings-data-analyst-acme-hyderabad-0-to-2-years-120626011886"
+
+        df = pd.DataFrame([
+            {
+                "lead_status": "🟢 NEW", "formatted_date": "Today", "company": "Acme",
+                "title": "Data Analyst", "extracted_skills": "SQL", "extracted_experience": "0 - 2 Years",
+                "location": "Hyderabad", "site": "Naukri", "final_apply_url": target_url
+            }
+        ])
+
+        # Run 1 generates a stamped archive + Tracker_Latest
+        gen = ExcelDashboardGenerator(self.config)
+        gen.generate(df, run_stats={"mode": "balanced"})
+        archive = sorted(glob.glob(os.path.join(self.leads_dir, "Job_Leads_*.xlsx")))[0]
+
+        # Human edits the ARCHIVE
+        wb = openpyxl.load_workbook(archive)
+        ws = wb["Active Job Leads"]
+        ws.cell(2, 11, value="Applied")
+        ws.cell(2, 12, value="Referred via alumni group")
+        wb.save(archive)
+        wb.close()
+
+        # Run 2 must honour it
+        gen2 = ExcelDashboardGenerator(self.config)
+        key = canonicalize_job_url(target_url)
+        self.assertEqual(gen2.applications_ledger[key]["status"], "Applied")
+        self.assertEqual(gen2.applications_ledger[key]["notes"], "Referred via alumni group")
+
+
 if __name__ == "__main__":
     unittest.main()
 

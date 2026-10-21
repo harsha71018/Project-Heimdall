@@ -14,6 +14,8 @@ from openpyxl.utils import get_column_letter
 import pandas as pd
 from url_utils import canonicalize_job_url, IDENTITY_QUERY_PARAMS
 
+SYNC_STAMP_SHEET = "_sync_stamp"
+
 
 class ExcelDashboardGenerator:
     """
@@ -41,6 +43,45 @@ class ExcelDashboardGenerator:
         self.stable_filename = self.output_config.get("stable_filename", "Tracker_Latest.xlsx")
         self.applications_file = self.output_config.get("applications_file", "applications.json")
         self.applications_ledger = self._sync_and_load_applications()
+
+    @staticmethod
+    def _stamp_key(url: str, company: str, title: str) -> str:
+        """Ledger key for a row: canonical URL, falling back to company::title."""
+        norm = canonicalize_job_url(url) if url else ""
+        if norm:
+            return norm
+        return f"{(company or '').strip().lower()}::{(title or '').strip().lower()}"
+
+    @staticmethod
+    def _file_mtime(path: str) -> float:
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0.0
+
+    @staticmethod
+    def _read_sync_stamps(wb) -> Dict[str, Tuple[str, str]]:
+        """
+        Reads the hidden stamp sheet written by generate().
+
+        Maps key -> (status, notes) exactly as written when the workbook was
+        generated. A cell whose CURRENT value differs from its stamp is a HUMAN
+        EDIT and must win over the ledger - even from a dated leads/ archive.
+
+        Workbooks without a stamp sheet (hand-made, or created before this
+        feature) keep the previous precedence rules unchanged.
+        """
+        stamps: Dict[str, Tuple[str, str]] = {}
+        if SYNC_STAMP_SHEET not in wb.sheetnames:
+            return stamps
+        ws = wb[SYNC_STAMP_SHEET]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or not row[0]:
+                continue
+            status = "" if len(row) < 2 or row[1] is None else str(row[1])
+            notes = "" if len(row) < 3 or row[2] is None else str(row[2])
+            stamps[str(row[0])] = (status, notes)
+        return stamps
 
     @staticmethod
     def _sanitize_cell_value(val: Any) -> str:
@@ -140,7 +181,9 @@ class ExcelDashboardGenerator:
         ledger: Dict[str, Dict[str, str]],
         allow_revert: bool = False,
         baseline: Optional[Dict[str, Dict[str, str]]] = None,
-        initial_ledger_keys: Optional[set] = None
+        initial_ledger_keys: Optional[set] = None,
+        stamps: Optional[Dict[str, Tuple[str, str]]] = None,
+        source_mtime: float = 0.0
     ) -> int:
         """Extracts status, notes, and job metadata from a worksheet into ledger."""
         if baseline is None:
@@ -221,6 +264,31 @@ class ExcelDashboardGenerator:
             if not key:
                 continue
 
+            # --- Human-edit detection (archive data-loss fix) ---------------
+            # The stamp records what generate() wrote into this cell. If the cell
+            # now differs, a human edited it - that edit must be honoured even
+            # when it lives in a dated leads/ archive.
+            stamp = stamps.get(key) if stamps else None
+            is_human_edit = stamp is not None and (
+                status_val != stamp[0] or notes_val != stamp[1]
+            )
+
+            if is_human_edit:
+                existing_meta = ledger.get(key, {})
+                ledger[key] = {
+                    "status": status_val if (status_val and status_val != "None") else "Not Applied",
+                    "notes": notes_val,
+                    "company": company_orig or existing_meta.get("company", ""),
+                    "title": title_orig or existing_meta.get("title", ""),
+                    "location": location_orig or existing_meta.get("location", ""),
+                    "platform": platform_orig or existing_meta.get("platform", ""),
+                    "url": url_target or existing_meta.get("url", ""),
+                    "last_updated": datetime.now().strftime("%Y-%m-%d"),
+                    "_edited_at": source_mtime if source_mtime else None,
+                }
+                updates += 1
+                continue
+
             # Fix N2: Old archives in leads/ cannot resurrect or modify keys already in applications.json
             if not allow_revert and key in initial_ledger_keys:
                 continue
@@ -240,7 +308,10 @@ class ExcelDashboardGenerator:
                 if allow_revert and key in ledger:
                     prev_status = ledger[key].get("status", "Not Applied")
                     prev_notes = ledger[key].get("notes", "")
-                    if prev_status != "Not Applied" or prev_notes != "":
+                    # A human edit recorded from another workbook (e.g. a dated
+                    # leads/ archive) must not be reverted by a stale primary.
+                    pending_human_edit = ledger[key].get("_edited_at") is not None
+                    if (prev_status != "Not Applied" or prev_notes != "") and not pending_human_edit:
                         existing_meta = ledger[key]
                         ledger[key] = {
                             "status": "Not Applied",
@@ -250,7 +321,8 @@ class ExcelDashboardGenerator:
                             "location": location_orig or existing_meta.get("location", ""),
                             "platform": platform_orig or existing_meta.get("platform", ""),
                             "url": url_target or existing_meta.get("url", ""),
-                            "last_updated": datetime.now().strftime("%Y-%m-%d")
+                            "last_updated": datetime.now().strftime("%Y-%m-%d"),
+                            "_edited_at": existing_meta.get("_edited_at"),
                         }
                         updates += 1
                 continue
@@ -265,7 +337,8 @@ class ExcelDashboardGenerator:
                 "location": location_orig or existing_meta.get("location", ""),
                 "platform": platform_orig or existing_meta.get("platform", ""),
                 "url": url_target or existing_meta.get("url", ""),
-                "last_updated": datetime.now().strftime("%Y-%m-%d")
+                "last_updated": datetime.now().strftime("%Y-%m-%d"),
+                "_edited_at": existing_meta.get("_edited_at"),
             }
             updates += 1
 
@@ -295,6 +368,8 @@ class ExcelDashboardGenerator:
             wb = None
             try:
                 wb = openpyxl.load_workbook(target_file, data_only=True)
+                stamps = self._read_sync_stamps(wb)
+                source_mtime = self._file_mtime(target_file)
                 sheets_to_read = []
                 if self.sheet_name in wb.sheetnames:
                     sheets_to_read.append(wb[self.sheet_name])
@@ -312,7 +387,9 @@ class ExcelDashboardGenerator:
                         ledger,
                         allow_revert=is_primary,
                         baseline=baseline,
-                        initial_ledger_keys=initial_ledger_keys
+                        initial_ledger_keys=initial_ledger_keys,
+                        stamps=stamps,
+                        source_mtime=source_mtime
                     )
 
             except PermissionError:
@@ -342,6 +419,7 @@ class ExcelDashboardGenerator:
           - Dual outputs: timestamped archive in leads/ and stable Tracker_Latest.xlsx in root.
         """
         save_stable = False
+        stamp_rows = []
         if output_path is not None:
             primary_target = output_path
         else:
@@ -460,6 +538,11 @@ class ExcelDashboardGenerator:
                     else:
                         status_val = "Not Applied"
                         notes_val = ""
+
+                    stamp_rows.append([
+                        self._stamp_key(apply_url, company_raw, title_raw),
+                        status_val, notes_val
+                    ])
 
                     c1 = ws.cell(row=row_idx, column=1, value=row_num)
                     c2 = ws.cell(row=row_idx, column=2, value=self._sanitize_cell_value(lead_status))
@@ -589,6 +672,11 @@ class ExcelDashboardGenerator:
                     nt_str = entry.get("notes", "")
                     upd_str = entry.get("last_updated", "-")
 
+                    stamp_rows.append([
+                        self._stamp_key(url_str, co_str, ti_str),
+                        st_str, nt_str
+                    ])
+
                     ca1 = ws_applied.cell(row=r_idx, column=1, value=app_idx)
                     ca2 = ws_applied.cell(row=r_idx, column=2, value=self._sanitize_cell_value(co_str))
                     ca3 = ws_applied.cell(row=r_idx, column=3, value=self._sanitize_cell_value(ti_str))
@@ -701,6 +789,15 @@ class ExcelDashboardGenerator:
 
             ws_summary.column_dimensions["A"].width = 40
             ws_summary.column_dimensions["B"].width = 24
+
+            # --- Hidden provenance stamp sheet -------------------------------
+            # Records what generate() wrote into each row so the next run can
+            # tell a human edit apart from a stale echo.
+            ws_stamp = wb.create_sheet(title=SYNC_STAMP_SHEET)
+            ws_stamp.sheet_state = "hidden"
+            ws_stamp.append(["key", "status", "notes"])
+            for _row_vals in stamp_rows:
+                ws_stamp.append(_row_vals)
 
             saved_file = self._safe_save(wb, primary_target)
             if save_stable:
