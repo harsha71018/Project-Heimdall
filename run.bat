@@ -26,9 +26,9 @@ if errorlevel 1 (
 echo.
 echo =====================================================================
 echo Select Scraping Intensity for Today:
-echo   [1] Balanced   - Recommended: Full Markdown on top listings
-echo   [2] Frugal     - Quick search scan
-echo   [3] Exhaustive - Deep sweep
+echo   [1] Balanced   (~24 credits) - Recommended: Full Markdown on top 4 listings
+echo   [2] Frugal     (  8 credits) - Quick search scan
+echo   [3] Exhaustive (~48 credits) - Deep Monday sweep
 echo =====================================================================
 choice /c 123 /t 5 /d 1 /m "Auto-selecting [1] in 5 seconds"
 if "%ERRORLEVEL%"=="3" (

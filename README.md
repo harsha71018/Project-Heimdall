@@ -336,6 +336,7 @@ To schedule Project Heimdall to run automatically at 8:00 AM every day on macOS 
 
 ```text
 Project-Heimdall/
+├── .github/                  # GitHub Actions CI workflow (Python 3.10-3.13 matrix)
 ├── config.yaml               # User search configuration, skills, and mode parameters
 ├── requirements.txt          # Python dependency requirements (tested minimum bounds)
 ├── .env.example              # Template for API keys
