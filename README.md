@@ -31,7 +31,7 @@ An automated job aggregation and tracking engine. It automatically discovers, va
 > [!IMPORTANT]
 > **Out-of-the-Box Configuration:**
 > This repository ships pre-configured with the author's target job search profile:
-> * **Roles:** Data Analyst, Business Analyst, Junior Data Analyst, MIS Executive
+> * **Roles:** Data Analyst, Data Annotator, SQL Developer, Power BI Developer
 > * **Location:** Hyderabad, India (with Remote support)
 > * **Experience Level:** 0–2 Years of Experience (Entry-Level / Fresher)
 > * **Tracked Skills:** SQL, Power BI, Python, Excel, Tableau, DAX
@@ -48,19 +48,15 @@ Project Heimdall operates on a hybrid scraping architecture designed to be **100
 | :--- | :--- | :--- | :--- |
 | **LinkedIn** | `JobSpy` | **100% Free** — No account, no API key required | All Modes (`frugal`, `balanced`, `exhaustive`) |
 | **Indeed** | `JobSpy` | **100% Free** — No account, no API key required | All Modes (`frugal`, `balanced`, `exhaustive`) |
-| **Naukri.com** | `Firecrawl Search v2` | **Free Tier** (500 free credits/month; 0 credits in frugal mode) | `balanced`, `exhaustive` modes |
+| **Naukri.com** | `Firecrawl Search v2` | **Free Tier** (1,000 free credits/month; 8 credits/run in frugal mode with key, or 0 credits without key) | `frugal` (snippet search), `balanced`, `exhaustive` |
 | **Glassdoor / ZipRecruiter** | `JobSpy` | **100% Free** — Optional toggle via `search.platforms` in `config.yaml` | Optional |
 
 > [!NOTE]
-> **Enterprise ATS Direct Links:** Direct application links (Workday, Greenhouse, Lever, Taleo, etc.) are recognized and validated when surfaced by JobSpy; Firecrawl itself targets Naukri listings.
+> **Enterprise ATS Direct Links:** Direct application links (Workday, Greenhouse, Lever, Taleo, etc.) are recognized and validated when surfaced by JobSpy through aggregator listings; Firecrawl itself targets Naukri listings.
 
 > [!TIP]
-> **Zero-Cost Operation (`--mode frugal`):**
-> If you don't want to use an API key at all, run:
-> ```bash
-> py main.py --mode frugal
-> ```
-> This runs exclusively on **LinkedIn and Indeed** using direct TLS-fingerprinted scraping with **zero cost, zero tokens, and zero API keys needed**.
+> **Zero-Cost Operation without API Key:**
+> If you don't provide a Firecrawl API key in `.env` (or set `firecrawl.enabled: false`), Project Heimdall runs exclusively on **LinkedIn and Indeed** with **zero cost, zero tokens, and zero API keys needed**.
 
 ---
 
@@ -115,15 +111,18 @@ When sharing this project or creating a custom package for a friend, follow thes
 - `config.yaml` (their Data Analyst search configuration)
 - `requirements.txt` (dependencies)
 - `.env.example` (API key template)
+- `.gitignore` (prevents accidental credential leaks)
+- `LICENSE` (MIT License)
+- `CHANGELOG.md` (version history & release notes)
+- `url_utils.py` (shared URL canonicalizer & identity query isolation)
 - `extractor.py` (skills extraction logic)
 - `scraper.py` (scraping engine)
 - `excel_generator.py` (Excel builder)
 - `main.py` (Data Analyst CLI orchestrator)
 - `run.bat` (1-click interactive runner)
 - `run_scheduled.bat` (headless scheduler runner)
-- `tests/` (unit and regression test suite)
 - `README.md` (this guide)
-- `.gitignore` (prevents accidental credential leaks)
+- `tests/` (unit and regression test suite)
 
 ### ⛔ NEVER Share These Files:
 - **`.env`** (⚠️ Contains your private API key! Never share this file).
@@ -144,7 +143,7 @@ Ensure Python 3.10+ (tested and verified up to Python 3.13) is installed.
 
 ### Step 2: Set Up API Keys (Optional but Recommended)
 1. In the project folder, make a copy of `.env.example` and rename it to `.env`.
-2. Get a free API key with 500 free credits/month from [Firecrawl.dev](https://www.firecrawl.dev).
+2. Get a free API key with 1,000 free credits/month from [Firecrawl.dev](https://www.firecrawl.dev).
 3. Paste the key inside `.env`:
    ```env
    FIRECRAWL_API_KEY=fc-YOUR_API_KEY_HERE
@@ -234,9 +233,9 @@ python3 main.py --role "Python Developer" --location "Remote" --hours 24 --mode 
 
 ### Tier 3: Advanced Portals & Regional Filters (`scraper.py`)
 For advanced users targeting non-metro cities or proprietary company career portals:
-- **Regional Cities:** If searching Tier-2 cities (e.g. *Kochi, Indore, Coimbatore, Jaipur*), add the city name to `KNOWN_CITIES` in `scraper.py` (Line 69) so Naukri company names are cleanly parsed from URL slugs.
-- **Role Keywords:** If searching niche roles like DevOps or QA, add keywords to `ROLE_KEYWORDS` in `scraper.py` (Line 75) to keep company names pristine.
-- **Custom Enterprise ATS:** Add specific corporate job board domains to `KNOWN_ATS_JOB_PATTERNS` in `scraper.py` (Line 480) to whitelist proprietary company portals.
+- **Regional Cities:** If searching Tier-2 cities (e.g. *Kochi, Indore, Coimbatore, Jaipur*), add the city name to `KNOWN_CITIES` in `scraper.py` so Naukri company names are cleanly parsed from URL slugs.
+- **Role Keywords:** If searching niche roles like DevOps or QA, add keywords to `ROLE_KEYWORDS` in `scraper.py` to keep company names pristine.
+- **Custom Enterprise ATS:** Add specific corporate job board domains to `KNOWN_ATS_JOB_PATTERNS` or `KNOWN_ENTERPRISE_PORTALS` in `scraper.py` to whitelist proprietary company portals.
 
 ---
 
@@ -283,7 +282,7 @@ Contains 12 structured, interactive columns:
 | **H** | `Location / Mode` | Work model (`Hybrid`, `On-site`, `Remote`). |
 | **I** | `Platform` | Source platform (`Naukri`, `LinkedIn`, `Indeed`, etc.). |
 | **J** | `Apply Action` | **Clickable blue button** linking directly to the job post. |
-| **K** | `Application Status` | **Interactive Dropdown**: `Not Applied`, `Applied`, `Interviewing`, `Rejected`, `Offer Received`. Preserved across runs! |
+| **K** | `Application Status` | **Interactive Dropdown**: `Not Applied`, `Applied`, `Referral Requested`, `Screening Call`, `Interviewing`, `Assessment`, `Rejected`, `Offer Received`. Preserved across runs! |
 | **L** | `Referral / Notes` | Free-text space for tracking referrals, HR contacts, or follow-ups. Preserved across runs! |
 
 ### Tab 2: Applied & In Progress (Permanent Kanban View)
@@ -342,6 +341,9 @@ Project-Heimdall/
 ├── .env.example              # Template for API keys
 ├── .env                      # [PRIVATE] Live Firecrawl API key
 ├── .gitignore                # Protects credentials, logs, and personal outputs
+├── LICENSE                   # Open-source MIT License
+├── CHANGELOG.md              # Detailed version history and release audit log
+├── url_utils.py              # Shared URL canonicalizer & identity query isolation
 ├── extractor.py              # Skill keyword matcher & experience/work-mode parser
 ├── scraper.py                # Dual engine orchestrator, ceiling filter, senior filter & seen ledger
 ├── excel_generator.py        # 12-column openpyxl builder with dropdowns, dual output, Tab 2 Kanban & Tab 3 audit
