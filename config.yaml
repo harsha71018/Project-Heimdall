@@ -17,6 +17,7 @@ search:
   # Experience level filter & ceiling gate
   experience_filter: "0-2 years"
   max_experience_years: 2      # Strict ceiling: discard jobs requiring > 2 years minimum
+  max_range_ceiling_years: 3   # Strict range ceiling: discard wide ranges (e.g. 0-5, 0-7, 2-5, 2-6)
   
   # Max age of job postings in hours (24h for fresh daily listings)
   hours_old: 24
@@ -27,9 +28,9 @@ search:
   # Platforms to search across: linkedin, indeed
   platforms:
     - "linkedin"
-    - "indeed"
+
     
-  indeed_country: "india"
+
 
 # ==============================================================================
 # Scraping Modes & Firecrawl Engine Configuration
@@ -59,8 +60,27 @@ modes:
     jobspy_results: 14
     description: "48 credits total: Full markdown on top 10 listings per role (4 roles x (2 search + 10 scrape))"
 
+  deep:
+    search_limit_per_role: 10
+    deep_scrape: true
+    timeout: 60
+    jobspy_results: 14
+    description: "Deep sweep with full markdown on top listings (alias for exhaustive)"
+
 firecrawl:
   enabled: true
+
+# ==============================================================================
+# AI Decision Gatekeeper (Tier 2 - Semantic Validation)
+# Evaluates candidate leads via OpenRouter free tier.
+# Fail-open: smoothly skipped if OPENROUTER_API_KEY is not set in .env.
+# ==============================================================================
+ai_gatekeeper:
+  enabled: true
+  provider: "openrouter"
+  model: "nvidia/nemotron-3-ultra-550b-a55b:free"
+  fallback_model: "openrouter/free"
+  min_fit_score: 6.0
 
 # Skill Extraction & Highlighting
 skills_filter:
@@ -108,3 +128,5 @@ output:
     - "Assessment"
     - "Rejected"
     - "Offer Received"
+    - "Ignored"
+    - "Not Accepting Applications"

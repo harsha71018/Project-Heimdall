@@ -16,6 +16,7 @@ if sys.platform.startswith("win"):
 
 from scraper import MultiPlatformJobScraper
 from excel_generator import ExcelDashboardGenerator
+from ai_gatekeeper import AIGatekeeper
 
 RUN_LOG_HEADERS = [
     "timestamp", "mode", "credits_used", "fc_candidates", "fc_markdown_hits",
@@ -267,6 +268,13 @@ def main():
         # 1. Scrape and Enrich Jobs
         enriched_jobs_df = scraper.scrape_all_roles()
 
+        # Tier-2 AI Semantic Decision Gatekeeper
+        ai_cfg = config.get("ai_gatekeeper", {})
+        if not enriched_jobs_df.empty and ai_cfg.get("enabled", True):
+            gatekeeper = AIGatekeeper(config)
+            if gatekeeper.is_active:
+                enriched_jobs_df = gatekeeper.filter_dataframe(enriched_jobs_df)
+
         # Post-flight Credit Check & Delta Computation
         end_credits = scraper.get_remaining_credits()
         if isinstance(start_credits, int) and isinstance(end_credits, int):
@@ -306,6 +314,7 @@ def main():
             "unparseable_naukri_dates": unparseable_naukri_dates,
             "dropped_senior_title": dropped_senior_title,
             "dropped_experience_ceiling": dropped_experience_ceiling,
+            "dropped_closed_job": stats.get("dropped_closed_job", 0),
         }
 
         log_updated = migrate_and_append_run_log(log_file, row_data)
@@ -334,7 +343,7 @@ def main():
                 print("[!] No jobs matching criteria were returned today (zero new leads or all filtered).")
             print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {stats.get('dropped_unlisted_host', 0)} unlisted-host URLs, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
             print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")
-            print(f"    - JobSpy (LinkedIn / Indeed)    : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
+            print(f"    - JobSpy (LinkedIn)             : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
             print(f"[+] Firecrawl Credit Audit              : {credit_audit_str}")
             print(log_status_str)
             print("=" * 70)
@@ -352,7 +361,7 @@ def main():
         print("\n" + "=" * 70)
         print(f"[+] SUCCESS! Total Active Opportunities Aggregated: {total_unique}")
         print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")
-        print(f"    - JobSpy (LinkedIn / Indeed)    : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
+        print(f"    - JobSpy (LinkedIn)             : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
         print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {stats.get('dropped_unlisted_host', 0)} unlisted-host URLs, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
         print(f"[+] Firecrawl Credit Audit              : {credit_audit_str}")
         print(f"[+] Output File                         : {os.path.abspath(generated_file)}")

@@ -172,7 +172,7 @@ class JobRequirementExtractor:
 
         loc_clean = (location or "").strip()
         loc_lower = loc_clean.lower()
-        desc_clean = (description or "").strip()
+        desc_clean = description.strip() if isinstance(description, str) else ""
         desc_lower = desc_clean.lower()
         combined_text = f"{loc_lower} {desc_lower}"
 

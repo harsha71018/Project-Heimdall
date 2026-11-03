@@ -39,7 +39,9 @@ class MultiPlatformJobScraper:
     ROLE_KEYWORDS = {
         'data', 'analyst', 'annotator', 'sql', 'developer', 'power',
         'bi', 'fresher', 'junior', 'intern',
-        'engineer', 'specialist', 'associate', 'trainee', 'consultant'
+        'engineer', 'specialist', 'associate', 'trainee', 'consultant',
+        'service', 'desk', 'support', 'itsm', 'infra',
+        'infrastructure', 'administrator', 'admin', 'l1', 'end', 'user'
     }
 
     # Pre-compiled experience ceiling patterns
@@ -100,6 +102,7 @@ class MultiPlatformJobScraper:
             "unparseable_naukri_dates": 0,
             "dropped_senior_title": 0,
             "dropped_experience_ceiling": 0,
+            "dropped_closed_job": 0,
             "dropped_unlisted_host": 0,
         }
 
@@ -734,12 +737,13 @@ class MultiPlatformJobScraper:
         except Exception:
             return None
 
-    def _within_ceiling(self, exp_str: str, max_years: int = 2) -> bool:
+    def _within_ceiling(self, exp_str: str, max_years: int = 2, max_upper_years: Optional[float] = None) -> bool:
         """
         Gates rows against max experience ceiling.
         Evaluates numeric experience ranges and standalone values first (using range-blanking
         so upper bounds of valid ranges are never mistaken for standalone minimums),
         then checks word-bounded fresher/entry-level tokens.
+        If max_upper_years is provided, also rejects ranges where the upper bound exceeds it.
         """
         if not exp_str or exp_str in ["Not Specified", "General Requirements"]:
             return True
@@ -749,16 +753,28 @@ class MultiPlatformJobScraper:
 
         # 1. Mixed unit ranges: "6 months to 1 year" or "1 year to 36 months"
         for m in self._MIXED_MO_TO_YR_RE.finditer(remaining):
-            min_years_found.append(float(m.group(1)) / 12.0)
+            low = float(m.group(1)) / 12.0
+            high = float(m.group(2))
+            min_years_found.append(low)
+            if max_upper_years is not None and high > max_upper_years:
+                return False
         remaining = self._MIXED_MO_TO_YR_RE.sub(" ", remaining)
 
         for m in self._MIXED_YR_TO_MO_RE.finditer(remaining):
-            min_years_found.append(float(m.group(1)))
+            low = float(m.group(1))
+            high = float(m.group(2)) / 12.0
+            min_years_found.append(low)
+            if max_upper_years is not None and high > max_upper_years:
+                return False
         remaining = self._MIXED_YR_TO_MO_RE.sub(" ", remaining)
 
         # 2. Year ranges: "0 - 2 Years", "5-8 years", "1+ to 4 years", "3–5 YOE"
         for m in self._YR_RANGE_RE.finditer(remaining):
-            min_years_found.append(float(m.group(1)))
+            low = float(m.group(1))
+            high = float(m.group(2))
+            min_years_found.append(low)
+            if max_upper_years is not None and high > max_upper_years:
+                return False
         remaining = self._YR_RANGE_RE.sub(" ", remaining)
 
         # 3. Standalone / Plus Years: "5+ years", "2 yrs", "4 YOE"
@@ -769,7 +785,11 @@ class MultiPlatformJobScraper:
         # 4. Month ranges & Standalone Months (only when no year requirement was found)
         if not min_years_found:
             for m in self._MO_RANGE_RE.finditer(remaining):
-                min_years_found.append(float(m.group(1)) / 12.0)
+                low = float(m.group(1)) / 12.0
+                high = float(m.group(2)) / 12.0
+                min_years_found.append(low)
+                if max_upper_years is not None and high > max_upper_years:
+                    return False
             remaining = self._MO_RANGE_RE.sub(" ", remaining)
 
             for m in self._MO_SINGLE_RE.finditer(remaining):
@@ -794,15 +814,48 @@ class MultiPlatformJobScraper:
         re.IGNORECASE
     )
 
+    EXCLUDED_TITLE_PATTERN = re.compile(
+        r'\b(?:'
+        r'receptionist|front\s+desk|front\s+office|'
+        r'customer\s+service|voice\s+process|telecaller|telecalling|bpo|call\s+center|'
+        r'people\s+operations|hr\s+intern|recruiter|talent\s+acquisition|'
+        r'sme\b|subject\s+matter\s+expert|'
+        r'package\s+consultant|consultant\b|'
+        r'engineer\s+(?:ii|iii|2|3)|analyst\s+(?:ii|iii|2|3)|'
+        r'(?:service\s+desk\s+)?(?:analyst\s+)?l[2-9]\b|level\s+[2-9]\b|'
+        r'sap\s+vss|openstack'
+        r')\b',
+        re.IGNORECASE
+    )
+
+    CLOSED_JOB_PATTERN = re.compile(
+        r'\b(?:'
+        r'no\s+longer\s+accepting\s+applications|'
+        r'not\s+accepting\s+applications|'
+        r'applications\s+are\s+closed|'
+        r'applications\s+have\s+closed|'
+        r'this\s+job\s+is\s+closed|'
+        r'this\s+job\s+has\s+expired|'
+        r'job\s+posting\s+has\s+expired|'
+        r'posting\s+is\s+no\s+longer\s+active|'
+        r'position\s+has\s+been\s+filled'
+        r')\b',
+        re.IGNORECASE
+    )
+
     def _is_senior_title(self, title: str, url: str = "", company: str = "") -> bool:
         """
-        Detects senior, lead, or management postings in the job title only.
+        Detects senior, lead, management, or explicitly off-domain titles.
         Ignores url and company so company names in URL slugs never cause false drops.
         Only strips non-seniority phrases ('lead generation', 'lead gen') before matching.
         """
         clean_title = (title or "").replace("-", " ").replace("_", " ").lower()
         clean_title = self.NON_SENIOR_FALSE_POSITIVES_RE.sub(" ", clean_title)
-        return bool(self.SENIOR_TITLE_PATTERN.search(clean_title))
+        if bool(self.SENIOR_TITLE_PATTERN.search(clean_title)):
+            return True
+        if bool(self.EXCLUDED_TITLE_PATTERN.search(clean_title)):
+            return True
+        return False
 
     def _resolve_row_canonical_url(self, row: Any) -> str:
         """Resolves and canonicalizes the best direct URL for a DataFrame row."""
@@ -919,7 +972,12 @@ class MultiPlatformJobScraper:
                         self.last_run_stats["dropped_future_naukri"] += 1
                         continue
                     age_days = (today - post_date).days
-                    if age_days > 14:
+                    configured_hours = self.config.get("hours_old")
+                    if configured_hours is not None:
+                        max_allowed_days = max(1, (int(configured_hours) + 12) // 24)
+                    else:
+                        max_allowed_days = 3
+                    if age_days > max_allowed_days:
                         self.last_run_stats["dropped_stale_naukri"] += 1
                         continue
                     date_status = "parsed"
@@ -936,12 +994,20 @@ class MultiPlatformJobScraper:
                 self.last_run_stats["dropped_senior_title"] += 1
                 continue
 
+            # Drop jobs that are already closed or no longer accepting applications
+            desc_text = str(job_dict.get("description", ""))
+            title_text = str(job_dict.get("title", ""))
+            if self.CLOSED_JOB_PATTERN.search(desc_text) or self.CLOSED_JOB_PATTERN.search(title_text):
+                self.last_run_stats["dropped_closed_job"] = self.last_run_stats.get("dropped_closed_job", 0) + 1
+                continue
+
             # Finding 1: Check authoritative Naukri slug ground-truth first
             slug_exp = self._extract_naukri_slug_experience(final_url_str)
             final_exp = slug_exp if slug_exp else extracted_info["experience"]
 
-            # Finding 1 Gate: Drop if minimum experience requirement exceeds ceiling
-            if not self._within_ceiling(final_exp, max_years=self.max_experience_years):
+            # Finding 1 Gate: Drop if minimum experience requirement exceeds ceiling or upper range exceeds ceiling
+            max_upper = self.config.get("max_range_ceiling_years", 3.0 if self.max_experience_years <= 2 else None)
+            if not self._within_ceiling(final_exp, max_years=self.max_experience_years, max_upper_years=max_upper):
                 self.last_run_stats["dropped_experience_ceiling"] += 1
                 continue
 

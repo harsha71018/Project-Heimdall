@@ -37,7 +37,7 @@ class ExcelDashboardGenerator:
         self.sheet_name = self.output_config.get("sheet_name", "Active Job Leads")
         self.status_options = self.output_config.get("status_options", [
             "Not Applied", "Applied", "Referral Requested",
-            "Screening Call", "Interviewing", "Assessment", "Rejected", "Offer Received"
+            "Screening Call", "Interviewing", "Assessment", "Rejected", "Offer Received", "Ignored", "Not Accepting Applications"
         ])
         self.leads_dir = self.output_config.get("leads_dir", "leads")
         self.stable_filename = self.output_config.get("stable_filename", "Tracker_Latest.xlsx")
@@ -467,6 +467,8 @@ class ExcelDashboardGenerator:
             new_lead_font = Font(name="Segoe UI", size=10, bold=True, color="047857")
             seen_lead_font = Font(name="Segoe UI", size=10, color="64748B")
             summary_val_font = Font(name="Segoe UI Semibold", size=10, color="0F172A")
+            ignored_font = Font(name="Segoe UI Semibold", size=10, color="94A3B8")
+            closed_font = Font(name="Segoe UI Semibold", size=10, color="DC2626")
 
             align_center = Alignment(horizontal="center", vertical="center")
             align_header = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -572,7 +574,12 @@ class ExcelDashboardGenerator:
                     c7.alignment = align_center
                     c9.alignment = align_center
                     c11.alignment = align_center
-                    c11.font = applied_font if (status_val and status_val != "Not Applied") else standard_font
+                    c11.font = (
+                        ignored_font if status_val == "Ignored"
+                        else closed_font if status_val == "Not Accepting Applications"
+                        else applied_font if (status_val and status_val != "Not Applied")
+                        else standard_font
+                    )
                     c12.font = standard_font
 
                     # Native openpyxl Hyperlink
@@ -646,8 +653,8 @@ class ExcelDashboardGenerator:
             active_apps = [
                 (k, v) for k, v in self.applications_ledger.items()
                 if isinstance(v, dict) and (
-                    v.get("status", "Not Applied") not in ("", "Not Applied", "None")
-                    or bool(str(v.get("notes", "")).strip())
+                    v.get("status", "Not Applied") not in ("", "Not Applied", "None", "Ignored", "Not Accepting Applications")
+                    or (bool(str(v.get("notes", "")).strip()) and v.get("status") not in ("Ignored", "Not Accepting Applications"))
                 )
             ]
 
@@ -697,7 +704,7 @@ class ExcelDashboardGenerator:
                     ca3.font = standard_font
                     ca5.alignment = align_center
                     ca7.alignment = align_center
-                    ca7.font = applied_font if st_str != "Not Applied" else standard_font
+                    ca7.font = ignored_font if st_str == "Ignored" else (closed_font if st_str == "Not Accepting Applications" else (applied_font if st_str != "Not Applied" else standard_font))
                     ca8.font = standard_font
                     ca9.alignment = align_center
                     ca9.font = standard_font
@@ -767,6 +774,7 @@ class ExcelDashboardGenerator:
                 ("Total Raw Candidates Gathered", total_raw_candidates),
                 ("Senior Roles Filtered", sr_dropped),
                 ("Experience Ceiling Filtered (> 2 YOE)", ceil_dropped),
+                ("Closed / Expired Postings Filtered", stats.get("dropped_closed_job", 0)),
                 ("Final Verified Leads Retained", total_leads_val),
                 ("Firecrawl Credits Consumed", credits_val)
             ]
