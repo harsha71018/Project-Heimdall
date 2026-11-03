@@ -273,7 +273,11 @@ Auto-selecting [1] in 5 seconds...
 | :--- | :--- | :--- | :--- |
 | **Frugal** | Fast SERP snippet search (no page scrape) | **8 credits** (or 2 credits for 1 role) | Daily background sweeps via Task Scheduler (~240 credits/month). |
 | **Balanced** | Full Markdown scrape on top 4 listings/role | **~24 credits** | Active application days where you want deep skill extraction. |
-| **Exhaustive**| Full Markdown scrape on top 10 listings/role| **~48 credits** | Weekly Monday sweeps to capture the entire market. |
+| **Exhaustive** (alias: **`deep`**) | Full Markdown scrape on top 10 listings/role | **~48 credits** | Weekly Monday sweeps to capture the entire market with full text extraction. |
+
+> [!TIP]
+> **CLI Ergonomics (`--mode deep`):**
+> `--mode deep` is an intuitive CLI alias for `--mode exhaustive` (e.g., `run.bat deep` or `py main.py --mode deep`). Both invoke the exact same comprehensive engine parameters: 10 full-page markdown scrapes per role on Naukri and 15 listings per role on LinkedIn.
 
 ---
 
