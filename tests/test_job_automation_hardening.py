@@ -518,6 +518,8 @@ class TestJobAutomationHardening(unittest.TestCase):
         # Test C: Malformed HTTP 200 response from Firecrawl + JobSpy exception (real scraper lifecycle)
         with patch.dict(os.environ, {"FIRECRAWL_API_KEY": "fc_test_key"}), \
              patch("main.ExcelDashboardGenerator") as MockGen, \
+             patch("scraper.MultiPlatformJobScraper.get_remaining_credits", return_value=None), \
+             patch("scraper.requests.get") as mock_fc_get, \
              patch("scraper.requests.post") as mock_fc_post, \
              patch("scraper.scrape_jobs", side_effect=Exception("JobSpy network error")), \
              patch("scraper.time.sleep"), \
@@ -538,19 +540,69 @@ class TestJobAutomationHardening(unittest.TestCase):
             self.assertFalse(MockGen.return_value.generate.called)
 
     def test_firecrawl_malformed_200_counts_as_error_not_success(self):
-        """Verify that HTTP 200 with invalid JSON increments fc_errors and does NOT increment fc_queries_successful."""
+        """Verify that HTTP 200 with invalid JSON or corrupted schema increments fc_errors and does NOT increment fc_queries_successful."""
         scraper = MultiPlatformJobScraper(self.config)
         scraper.firecrawl_api_key = "test_key"
         
-        mock_res = MagicMock()
-        mock_res.status_code = 200
-        mock_res.json.side_effect = ValueError("Invalid JSON from server")
-        
-        with patch("requests.post", return_value=mock_res):
+        # 1. Invalid JSON string
+        mock_res_invalid_json = MagicMock()
+        mock_res_invalid_json.status_code = 200
+        mock_res_invalid_json.json.side_effect = ValueError("Invalid JSON from server")
+        with patch("requests.post", return_value=mock_res_invalid_json):
+            scraper.last_run_stats["fc_queries_successful"] = 0
+            scraper.last_run_stats["fc_errors"] = 0
             df = scraper._scrape_with_firecrawl("Data Analyst", "Hyderabad")
             self.assertTrue(df.empty)
             self.assertEqual(scraper.last_run_stats.get("fc_queries_successful", 0), 0)
-            self.assertGreaterEqual(scraper.last_run_stats.get("fc_errors", 0), 1)
+            self.assertEqual(scraper.last_run_stats.get("fc_errors", 0), 1)
+
+        # 2. {"success": true, "data": null}
+        mock_res_null_data = MagicMock()
+        mock_res_null_data.status_code = 200
+        mock_res_null_data.json.return_value = {"success": True, "data": None}
+        with patch("requests.post", return_value=mock_res_null_data):
+            scraper.last_run_stats["fc_queries_successful"] = 0
+            scraper.last_run_stats["fc_errors"] = 0
+            df = scraper._scrape_with_firecrawl("Data Analyst", "Hyderabad")
+            self.assertTrue(df.empty)
+            self.assertEqual(scraper.last_run_stats.get("fc_queries_successful", 0), 0)
+            self.assertEqual(scraper.last_run_stats.get("fc_errors", 0), 1)
+
+        # 3. {"success": true, "data": {"web": "not-a-list"}}
+        mock_res_not_list = MagicMock()
+        mock_res_not_list.status_code = 200
+        mock_res_not_list.json.return_value = {"success": True, "data": {"web": "not-a-list"}}
+        with patch("requests.post", return_value=mock_res_not_list):
+            scraper.last_run_stats["fc_queries_successful"] = 0
+            scraper.last_run_stats["fc_errors"] = 0
+            df = scraper._scrape_with_firecrawl("Data Analyst", "Hyderabad")
+            self.assertTrue(df.empty)
+            self.assertEqual(scraper.last_run_stats.get("fc_queries_successful", 0), 0)
+            self.assertEqual(scraper.last_run_stats.get("fc_errors", 0), 1)
+
+        # 4. {"success": true, "data": {"web": [null]}}
+        mock_res_null_entry = MagicMock()
+        mock_res_null_entry.status_code = 200
+        mock_res_null_entry.json.return_value = {"success": True, "data": {"web": [None]}}
+        with patch("requests.post", return_value=mock_res_null_entry):
+            scraper.last_run_stats["fc_queries_successful"] = 0
+            scraper.last_run_stats["fc_errors"] = 0
+            df = scraper._scrape_with_firecrawl("Data Analyst", "Hyderabad")
+            self.assertTrue(df.empty)
+            self.assertEqual(scraper.last_run_stats.get("fc_queries_successful", 0), 0)
+            self.assertEqual(scraper.last_run_stats.get("fc_errors", 0), 1)
+
+        # 5. Genuine valid empty search: {"success": true, "data": {"web": []}}
+        mock_res_valid_empty = MagicMock()
+        mock_res_valid_empty.status_code = 200
+        mock_res_valid_empty.json.return_value = {"success": True, "data": {"web": []}}
+        with patch("requests.post", return_value=mock_res_valid_empty):
+            scraper.last_run_stats["fc_queries_successful"] = 0
+            scraper.last_run_stats["fc_errors"] = 0
+            df = scraper._scrape_with_firecrawl("Data Analyst", "Hyderabad")
+            self.assertTrue(df.empty)
+            self.assertEqual(scraper.last_run_stats.get("fc_queries_successful", 0), 1)
+            self.assertEqual(scraper.last_run_stats.get("fc_errors", 0), 0)
 
 
 if __name__ == "__main__":

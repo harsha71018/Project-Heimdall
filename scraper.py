@@ -425,17 +425,40 @@ class MultiPlatformJobScraper:
                 self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
                 return pd.DataFrame()
 
-            raw_data = raw_json.get("data", {})
-            if isinstance(raw_data, dict):
-                items = raw_data.get("web", [])
-                if not isinstance(items, list):
-                    items = []
-            elif isinstance(raw_data, list):
-                items = raw_data
-            else:
-                items = []
+            raw_data = raw_json.get("data")
+            if raw_data is None:
+                print("   [!] Firecrawl response missing or null 'data' container.")
+                self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
+                return pd.DataFrame()
 
-            # Only increment fc_queries_successful after JSON parsing and response-schema validation succeed
+            if isinstance(raw_data, list):
+                candidate_items = raw_data
+            elif isinstance(raw_data, dict):
+                if "web" in raw_data:
+                    web_val = raw_data.get("web")
+                    if not isinstance(web_val, list):
+                        print(f"   [!] Firecrawl 'data.web' container is not a list: {type(web_val)}")
+                        self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
+                        return pd.DataFrame()
+                    candidate_items = web_val
+                else:
+                    # Valid empty dict structure with no search matches
+                    candidate_items = []
+            else:
+                print(f"   [!] Firecrawl 'data' field has invalid container type: {type(raw_data)}")
+                self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
+                return pd.DataFrame()
+
+            # Strictly validate that all search result entries are valid dictionary objects
+            for idx, item in enumerate(candidate_items):
+                if not isinstance(item, dict):
+                    print(f"   [!] Firecrawl search result entry #{idx} is not a dictionary: {type(item)}")
+                    self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
+                    return pd.DataFrame()
+
+            items = candidate_items
+
+            # Only increment fc_queries_successful after container and item schema validation succeed
             self.last_run_stats["fc_queries_successful"] = self.last_run_stats.get("fc_queries_successful", 0) + 1
 
             self.last_run_stats["fc_candidates"] += len(items)
