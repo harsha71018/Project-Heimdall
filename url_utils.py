@@ -18,10 +18,11 @@ IDENTITY_QUERY_PARAMS = {
 }
 
 
-def canonicalize_job_url(url: str) -> str:
+def canonicalize_job_url(url: str, *, native_ids: bool = True) -> str:
     """
     Normalizes a job URL while preserving platform-required identity query parameters
     (Indeed ?jk=, Glassdoor ?jl=, BambooHR/Accenture ?id=, Infosys ?jobReferenceCode=, etc.).
+    native_ids=False is only for matching stamps written before native-ID migration.
     """
     if not url or not isinstance(url, str):
         return ""
@@ -32,6 +33,22 @@ def canonicalize_job_url(url: str) -> str:
         parsed = urlsplit(raw)
         if not parsed.scheme or not parsed.hostname:
             return ""
+        host = parsed.hostname.lower()
+        def on_domain(domain):
+            return host == domain or host.endswith("." + domain)
+        if native_ids and on_domain("linkedin.com"):
+            match = re.fullmatch(r"/jobs/view/(?:[\w-]+-)?(\d+)/?", parsed.path)
+            if match:
+                return f"https://www.linkedin.com/jobs/view/{match.group(1)}"
+        if native_ids and on_domain("naukri.com"):
+            match = re.fullmatch(r"/job-listings-(?:[\w-]+-)?(\d{10,14})/?", parsed.path)
+            if match:
+                return f"https://www.naukri.com/job-listings-{match.group(1)}"
+        if native_ids and (on_domain("indeed.com") or on_domain("indeed.co.in")):
+            params = dict(parse_qsl(parsed.query))
+            job_id = params.get("jk", "")
+            if parsed.path.rstrip("/") in ("/viewjob", "/m/viewjob", "/rc/clk") and re.fullmatch(r"[a-fA-F0-9]{16}", job_id):
+                return f"https://www.indeed.com/viewjob?jk={job_id.lower()}"
         kept_params = [
             (k.lower(), v.strip().lower())
             for k, v in parse_qsl(parsed.query, keep_blank_values=False)

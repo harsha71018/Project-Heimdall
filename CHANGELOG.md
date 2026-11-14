@@ -5,6 +5,18 @@ All notable changes to Project Heimdall will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Sync Excel status and notes independently, with per-field conflict timestamps and per-workbook edit observations to prevent replaying earlier edits on later saves.
+- Normalize LinkedIn, Naukri, and Indeed URL variants by native job ID. Migrate application and freshness ledgers with original-file backups, preserve conflicting application records, and recognize old workbook stamps.
+- Filter closed, stale, and ineligible postings before deduplication so an unusable copy cannot suppress an open counterpart.
+- Evaluate all detected mandatory experience requirements. Description requirements cannot be overwritten by a lower Naukri slug range; preserve relevant excerpts for AI review. The configured upper-range ceiling is unchanged.
+- Replace the age-based lock-file deletion with an OS-held process lock, fail closed on lock I/O errors, and reload freshness state after acquiring the lock. The lock file remains on disk safely after release.
+
+### Validation
+- Added offline regression coverage for the five review findings, migration backups, repeated workbook edits, and a real child-process crash/recovery scenario.
+
 ## [1.3.0] - 2026-11-14
 
 ### Added

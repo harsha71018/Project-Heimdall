@@ -106,7 +106,9 @@ class AIGatekeeper:
                 "company": str(row.get("company", "")),
                 "experience": str(row.get("extracted_experience", "Not Specified")),
                 "location": str(row.get("location", "")),
-                "snippet": str(row.get("description", ""))[:400]
+                "snippet": str(row.get("description", ""))[:400],
+                "experience_evidence": row.get("experience_evidence", []),
+                "experience_conflict": row.get("experience_conflict", False)
             })
 
         roles_str = ", ".join(self.target_titles)

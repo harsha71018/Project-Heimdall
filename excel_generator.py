@@ -3,6 +3,7 @@ import re
 import json
 import glob
 import tempfile
+import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
@@ -13,6 +14,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils import get_column_letter
 import pandas as pd
 from url_utils import canonicalize_job_url, IDENTITY_QUERY_PARAMS
+from ledger_utils import backup_identity_migration, normalize_applications
 
 SYNC_STAMP_SHEET = "_sync_stamp"
 
@@ -80,7 +82,9 @@ class ExcelDashboardGenerator:
                 continue
             status = "" if len(row) < 2 or row[1] is None else str(row[1])
             notes = "" if len(row) < 3 or row[2] is None else str(row[2])
+            stamp_key = canonicalize_job_url(str(row[0])) or str(row[0])
             stamps[str(row[0])] = (status, notes)
+            stamps.setdefault(stamp_key, (status, notes))
         return stamps
 
     @staticmethod
@@ -197,7 +201,9 @@ class ExcelDashboardGenerator:
         baseline: Optional[Dict[str, Dict[str, str]]] = None,
         initial_ledger_keys: Optional[set] = None,
         stamps: Optional[Dict[str, Tuple[str, str]]] = None,
-        source_mtime: float = 0.0
+        source_mtime: float = 0.0,
+        source_id: str = "",
+        source_version: str = ""
     ) -> int:
         """Extracts status, notes, and job metadata from a worksheet into ledger."""
         if baseline is None:
@@ -282,28 +288,58 @@ class ExcelDashboardGenerator:
             # The stamp records what generate() wrote into this cell. If the cell
             # now differs, a human edited it - that edit must be honoured even
             # when it lives in a dated leads/ archive.
-            stamp = stamps.get(key) if stamps else None
+            legacy_key = canonicalize_job_url(url_target, native_ids=False) or key
+            stamp = stamps.get(legacy_key, stamps.get(key)) if stamps else None
+            existing_meta = ledger.get(key, {})
+            observations = dict(existing_meta.get("_sync_observations", {}))
+            observation_key = source_id + "::" + legacy_key
+            previous = observations.get(observation_key)
+            # Once an edit was consumed, compare against the last observed cells.
+            # A subsequent notes-only save must not replay the earlier status edit.
+            if stamp is not None and source_id:
+                if previous and previous[0] == source_version:
+                    stamp = tuple(previous[1:3])
+                observed = [source_version, status_val, notes_val]
+                if previous != observed:
+                    observations[observation_key] = observed
+                    if key in ledger:
+                        ledger[key]["_sync_observations"] = observations
+                        updates += 1
             is_human_edit = stamp is not None and (
                 status_val != stamp[0] or notes_val != stamp[1]
             )
 
             if is_human_edit:
                 existing_meta = ledger.get(key, {})
-                existing_edited_at = existing_meta.get("_edited_at")
-                # If ledger already holds a human edit from another file, only overwrite if current edit is newer or equal
-                if existing_edited_at and source_mtime and source_mtime < existing_edited_at:
+                field_times = dict(existing_meta.get("_field_edited_at", {}))
+                if "_field_edited_at" not in existing_meta and existing_meta.get("_edited_at"):
+                    field_times = dict.fromkeys(("status", "notes"), existing_meta["_edited_at"])
+                merged = {
+                    "status": existing_meta.get("status", stamp[0] or "Not Applied"),
+                    "notes": existing_meta.get("notes", stamp[1]),
+                }
+                changed = False
+                for field, value, original in (("status", status_val or "Not Applied", stamp[0] or "Not Applied"),
+                                                ("notes", notes_val, stamp[1])):
+                    if value != original and source_mtime >= (field_times.get(field) or 0):
+                        merged[field] = value
+                        field_times[field] = source_mtime
+                        changed = True
+                if not changed:
                     continue
 
                 ledger[key] = {
-                    "status": status_val if (status_val and status_val != "None") else "Not Applied",
-                    "notes": notes_val,
+                    **existing_meta,
+                    **merged,
                     "company": company_orig or existing_meta.get("company", ""),
                     "title": title_orig or existing_meta.get("title", ""),
                     "location": location_orig or existing_meta.get("location", ""),
                     "platform": platform_orig or existing_meta.get("platform", ""),
                     "url": url_target or existing_meta.get("url", ""),
                     "last_updated": datetime.now().strftime("%Y-%m-%d"),
-                    "_edited_at": source_mtime if source_mtime else None,
+                    "_edited_at": max(field_times.values(), default=0),
+                    "_field_edited_at": field_times,
+                    **({"_sync_observations": observations} if source_id else {}),
                 }
                 updates += 1
                 continue
@@ -339,6 +375,7 @@ class ExcelDashboardGenerator:
                     if (prev_status != "Not Applied" or prev_notes != "") and not pending_human_edit:
                         existing_meta = ledger[key]
                         ledger[key] = {
+                            **existing_meta,
                             "status": "Not Applied",
                             "notes": "",
                             "company": company_orig or existing_meta.get("company", ""),
@@ -355,6 +392,7 @@ class ExcelDashboardGenerator:
             clean_status = status_val if status_val and status_val != "None" else "Not Applied"
             existing_meta = ledger.get(key, {})
             ledger[key] = {
+                **existing_meta,
                 "status": clean_status,
                 "notes": notes_val,
                 "company": company_orig or existing_meta.get("company", ""),
@@ -385,6 +423,12 @@ class ExcelDashboardGenerator:
             except Exception as e:
                 print(f"[!] Warning: Could not read '{self.applications_file}': {e}")
 
+        normalized = normalize_applications(ledger)
+        migrated = normalized != ledger
+        if migrated:
+            backup_identity_migration(self.applications_file)
+            ledger = normalized
+
         initial_ledger_keys = set(ledger.keys())
         candidate_files = self._get_ordered_sync_candidates()
         total_updates = 0
@@ -414,7 +458,9 @@ class ExcelDashboardGenerator:
                         baseline=baseline,
                         initial_ledger_keys=initial_ledger_keys,
                         stamps=stamps,
-                        source_mtime=source_mtime
+                        source_mtime=source_mtime,
+                        source_id=os.path.normcase(os.path.abspath(target_file)) + "::" + ws.title,
+                        source_version=str(wb[SYNC_STAMP_SHEET].cell(1, 4).value or "") if stamps else ""
                     )
 
             except PermissionError:
@@ -429,7 +475,7 @@ class ExcelDashboardGenerator:
                     except Exception:
                         pass
 
-        if total_updates > 0:
+        if total_updates > 0 or migrated:
             self._atomic_save_applications(ledger)
 
         return ledger
@@ -831,6 +877,7 @@ class ExcelDashboardGenerator:
             ws_stamp = wb.create_sheet(title=SYNC_STAMP_SHEET)
             ws_stamp.sheet_state = "hidden"
             ws_stamp.append(["key", "status", "notes"])
+            ws_stamp.cell(1, 4, uuid.uuid4().hex)
             for _row_vals in stamp_rows:
                 ws_stamp.append(_row_vals)
 

@@ -71,14 +71,14 @@ flowchart TD
     A["User launches run.bat / Task Scheduler"] --> B{"Choose Mode<br/>(Frugal / Balanced / Exhaustive / Deep)"}
     B --> C["Local JobSpy Engine<br/>(LinkedIn & Direct Corporate ATS Portals)"]
     B --> D["Firecrawl Search v2 Engine<br/>(Naukri.com Listings)"]
-    C --> E["URL Canonicalizer & Multi-Stage Deduplication"]
-    D --> E
-    E --> F["Tier-1 Gate: Seniority & Off-Domain Pruning<br/>(Rejects Sr / Lead / Manager / Receptionist / BPO)"]
-    F --> G["Tier-1 Gate: Experience Ceiling & Range Gate<br/>(Rejects > 2 YOE min & > 3 YOE ceiling)"]
-    G --> H["Tier-1 Gate: Closed-Job Pre-Filter<br/>(Drops 'No longer accepting applications')"]
-    H --> I["Tier-2 Gate: AI Semantic Decision Gatekeeper<br/>(OpenRouter: Nemotron-3-Ultra-550B Free)"]
-    I --> J["Freshness Engine (seen_jobs.json)<br/>(Tags 🟢 NEW vs ⚪ SEEN)"]
-    J --> K["Excel Dashboard Generator<br/>(Tab 1: Leads, Tab 2: Kanban, Tab 3: Funnel Audit)"]
+    C --> F["Tier-1 Gate: Stale Dates, Seniority & Off-Domain Pruning"]
+    D --> F
+    F --> H["Tier-1 Gate: Closed-Job Pre-Filter"]
+    H --> G["Tier-1 Gate: Description and URL Experience Requirements<br/>(Rejects > 2 YOE min & > 3 YOE ceiling)"]
+    G --> J["Freshness Engine (seen_jobs.json)"]
+    J --> E["Native Job Identity & Cross-Platform Deduplication"]
+    E --> I["Tier-2 Gate: AI Semantic Decision Gatekeeper"]
+    I --> K["Excel Dashboard Generator<br/>(Leads, Applications, Funnel Audit)"]
     K --> L["Dual Output & Persistent Memory<br/>(Tracker_Latest.xlsx + leads/ + applications.json)"]
     L --> M["Analytics Logger<br/>(run_log.csv)"]
 ```
@@ -88,7 +88,7 @@ flowchart TD
    - **Firecrawl Search v2 (Cloud)**: Targets direct Naukri listing paths with optional full markdown parsing to bypass anti-bot protections.
 2. **Two-Tier Quality Gating**:
    - **Tier-1 Deterministic Engine**:
-     - Extracts authoritative experience requirements from Naukri URL slugs (`-1-to-2-years-`) and description bodies.
+     - Collects all detected mandatory experience requirements from description bodies and Naukri URL slugs (`-1-to-2-years-`). Preferred experience is excluded from the mandatory ceiling; a low URL range cannot override a higher explicit description requirement. Relevant excerpts reach the AI even when they occur after the first 400 description characters.
      - Detects and drops senior listings (`Senior`, `Sr.`, `Lead`, `Manager`, `Architect`, `Principal`, `Director`).
      - Prunes off-domain noise (`Receptionist`, `Voice Process`, `Telecaller`, `Customer Service`, `SME`, `Engineer II/III`).
      - Enforces a strict **Range Ceiling Gate** (`max_range_ceiling_years: 3.0`) to drop wide ranges (`0–5`, `0–7`, `2–5`, `2–6 YOE`) while keeping authentic entry-level (`0–2`, `1–3 YOE`, `Fresher`).
@@ -104,7 +104,9 @@ flowchart TD
 4. **Interactive Triple-Tab Excel Output & Persistent Memory**:
    - Clickable native **"Apply Now"** buttons jump straight to the application page.
    - Application Status dropdowns with 10 options: `Not Applied`, `Applied`, `Referral Requested`, `Screening Call`, `Interviewing`, `Assessment`, `Rejected`, `Offer Received`, **`Ignored`** (slate-gray), and **`Not Accepting Applications`** (crimson).
-   - **Persistent Memory**: Statuses and notes you enter in Excel are synchronized and preserved in `applications.json` across all future runs.
+   - **Persistent Memory**: Status and notes sync independently. Only conflicting edits to the same field use workbook modification time; previously consumed edits are not replayed when another field changes. Legacy unstamped workbooks retain their existing precedence rules.
+   - **Stable Job Identity**: LinkedIn, Naukri, and Indeed URL variants share a native job ID while Apply Now keeps the original link. Existing ledger keys migrate automatically, with byte-preserving `.identity-*.bak` backups. Colliding application records remain recoverable in `_identity_conflicts`; field timestamps select the active values. Backups contain personal tracking data and remain gitignored.
+   - **Run Ownership**: The operating system holds the run lock until exit, even beyond 30 minutes, and releases it after a crash. `heimdall.lock` normally remains on disk; its presence alone does not mean a run is active. An inaccessible lock blocks the run with exit code 2.
    - **Dual Output**: Generates both a timestamped archive in `leads/` (e.g. `leads/Job_Leads_2026-10-14_0110.xlsx`) and the stable desktop anchor `Tracker_Latest.xlsx`.
    - **Tab 2: Applied & In Progress**: Permanent Kanban board tracking active applications across all past and future runs. Postings marked as `Ignored` or `Not Accepting Applications` are automatically excluded to keep your active pipeline clean.
    - **Tab 3: Run Summary**: Full audit table displaying raw candidates, filter drops (including closed postings), and credit consumption.
@@ -126,6 +128,8 @@ When sharing this project or creating a custom package for a friend, follow thes
 - `LICENSE` (MIT License)
 - `CHANGELOG.md` (version history & release notes)
 - `url_utils.py` (shared URL canonicalizer & identity query isolation)
+- `ledger_utils.py` (identity migration and recovery backups)
+- `run_lock.py` (process-owned run locking)
 - `extractor.py` (skills extraction logic)
 - `scraper.py` (scraping engine)
 - `ai_gatekeeper.py` (Tier-2 AI semantic decision gatekeeper)
@@ -366,6 +370,8 @@ Project-Heimdall/
 ├── LICENSE                   # Open-source MIT License
 ├── CHANGELOG.md              # Detailed version history and release audit log
 ├── url_utils.py              # Shared URL canonicalizer & identity query isolation
+├── ledger_utils.py           # Identity migration and recovery backups
+├── run_lock.py               # OS-held run lock with crash recovery
 ├── extractor.py              # Skill keyword matcher & experience/work-mode parser
 ├── scraper.py                # Dual engine orchestrator, ceiling filter, senior filter & seen ledger
 ├── ai_gatekeeper.py          # Tier-2 AI Semantic Decision Gatekeeper (OpenRouter free model integration)
@@ -378,12 +384,13 @@ Project-Heimdall/
 ├── seen_jobs.json            # Persistent URL ledger with 45-day rolling pruning
 ├── applications.json         # Persistent application status & notes ledger
 ├── run_log.csv               # Historical telemetry: timestamp, mode, credits, candidates, drops
-└── tests/                    # Unit and regression test suite (64 passing tests)
+└── tests/                    # Unit and regression test suite
     ├── test_phase2.py
     ├── test_refinements.py
     ├── test_experience_order.py
     ├── test_nan_url.py
-    └── test_job_automation_hardening.py
+    ├── test_job_automation_hardening.py
+    └── test_review_regressions.py
 ```
 
 ### 📦 Required Libraries & Tech Stack

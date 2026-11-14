@@ -402,7 +402,7 @@ class TestPhase2Acceptance(unittest.TestCase):
 
         self.assertEqual(
             canonicalize_job_url(url_job1),
-            "https://www.indeed.co.in/viewjob?jk=0123456789abcdef"
+            "https://www.indeed.com/viewjob?jk=0123456789abcdef"
         )
         self.assertNotEqual(canonicalize_job_url(url_job1), canonicalize_job_url(url_job2))
 

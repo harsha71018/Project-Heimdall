@@ -17,6 +17,7 @@ if sys.platform.startswith("win"):
 from scraper import MultiPlatformJobScraper
 from excel_generator import ExcelDashboardGenerator
 from ai_gatekeeper import AIGatekeeper
+from run_lock import acquire_run_lock, release_run_lock
 
 RUN_LOG_HEADERS = [
     "timestamp", "mode", "credits_used", "fc_candidates", "fc_markdown_hits",
@@ -163,38 +164,6 @@ def load_config(config_path: str = "config.yaml") -> dict:
 
 
 LOCK_FILE = "heimdall.lock"
-MAX_LOCK_AGE_MINUTES = 30
-
-
-def acquire_run_lock(lock_file: str = LOCK_FILE) -> bool:
-    """Prevents two Heimdall runs (e.g. Task Scheduler + manual) from racing."""
-    try:
-        if os.path.exists(lock_file):
-            age_min = (datetime.now() - datetime.fromtimestamp(os.path.getmtime(lock_file))).total_seconds() / 60
-            if age_min >= MAX_LOCK_AGE_MINUTES:
-                try:
-                    os.remove(lock_file)
-                except OSError:
-                    pass
-            else:
-                return False
-        fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(datetime.now().isoformat())
-        return True
-    except FileExistsError:
-        return False
-    except OSError:
-        return True  # never block a run because of the lock itself
-
-
-def release_run_lock(lock_file: str = LOCK_FILE) -> None:
-    """Releases the run lock file."""
-    try:
-        if os.path.exists(lock_file):
-            os.remove(lock_file)
-    except OSError:
-        pass
 
 
 def parse_args():
@@ -258,10 +227,12 @@ def main():
         return
 
     if not acquire_run_lock():
-        print(f"[!] Another instance is already running (lock: {LOCK_FILE}). Exiting.")
+        print(f"[!] Run lock unavailable (another run or inaccessible lock: {LOCK_FILE}). Exiting.")
         sys.exit(2)
 
     try:
+        # Reload persistent state only after acquiring exclusive run ownership.
+        scraper.seen_jobs = scraper._load_seen_jobs(max_days=45)
         # Pre-flight Credit Check
         start_credits = scraper.get_remaining_credits()
         if start_credits is not None:

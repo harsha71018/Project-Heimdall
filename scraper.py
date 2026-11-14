@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from jobspy import scrape_jobs
 from extractor import JobRequirementExtractor
 from url_utils import canonicalize_job_url, IDENTITY_QUERY_PARAMS
+from ledger_utils import backup_identity_migration
 
 # Load environment variables (.env)
 load_dotenv()
@@ -138,6 +139,9 @@ class MultiPlatformJobScraper:
             cutoff = datetime.now()
             pruned = {}
             for url, date_str in data.items():
+                url = canonicalize_job_url(url) or url
+                if url in pruned and pruned[url] >= str(date_str):
+                    continue
                 try:
                     entry_date = datetime.strptime(str(date_str), "%Y-%m-%d")
                     if (cutoff - entry_date).days <= max_days:
@@ -156,6 +160,11 @@ class MultiPlatformJobScraper:
         os.makedirs(parent_dir, exist_ok=True)
         tmp_path = None
         try:
+            if os.path.exists(abs_target):
+                with open(abs_target, encoding="utf-8") as old_file:
+                    old_data = json.load(old_file)
+                if any((canonicalize_job_url(key) or key) != key for key in old_data):
+                    backup_identity_migration(abs_target)
             with tempfile.NamedTemporaryFile(
                 mode="w", dir=parent_dir, delete=False, encoding="utf-8", suffix=".tmp"
             ) as tmp_f:
@@ -316,11 +325,9 @@ class MultiPlatformJobScraper:
 
         # Deduplicate based on canonical URL and cross-platform company/title/location
         print(f"\n[*] Total raw direct jobs collected: {len(combined_df)}")
-        deduped_df = self._deduplicate_jobs(combined_df)
-        print(f"[*] Total unique verified jobs after deduplication: {len(deduped_df)}")
-
-        # Enrich with skills, slug ground-truth experience, ceiling gate, and freshness tags
-        enriched_df = self._enrich_jobs(deduped_df)
+        # Reject closed/stale/ineligible variants before collapsing equivalent leads.
+        enriched_df = self._deduplicate_jobs(self._enrich_jobs(combined_df))
+        print(f"[*] Total unique verified jobs after deduplication: {len(enriched_df)}")
         print(f"[*] Final candidates within experience ceiling (<= {self.max_experience_years} YOE): {len(enriched_df)}")
 
         # Record exact per-engine retention statistics
@@ -1028,7 +1035,7 @@ class MultiPlatformJobScraper:
         Parse descriptions to extract skills, experience, and clean apply links.
         Applies:
         - Senior title & slug heuristic gate (<= 2 YOE ceiling)
-        - Naukri URL slug ground-truth experience override
+        - Description requirements plus Naukri slug experience evidence
         - Post-fetch experience ceiling gate (<= max_experience_years)
         - Cross-run freshness tracker (🟢 NEW vs ⚪ SEEN) via canonicalize_job_url()
         """
@@ -1090,12 +1097,20 @@ class MultiPlatformJobScraper:
                 self.last_run_stats["dropped_closed_job"] = self.last_run_stats.get("dropped_closed_job", 0) + 1
                 continue
 
-            # Finding 1: Check authoritative Naukri slug ground-truth first
+            # Preserve description requirements even when the URL advertises a lower range
             slug_exp = self._extract_naukri_slug_experience(final_url_str)
-            final_exp = slug_exp if slug_exp else extracted_info["experience"]
+            body_exp = extracted_info["experience"]
+            evidence = [body_exp] if body_exp != "Not Specified" else []
+            if slug_exp and slug_exp not in evidence:
+                evidence.append(slug_exp)
+            final_exp = "; ".join(evidence) or "Not Specified"
+            job_dict["experience_evidence"] = extracted_info["experience_evidence"] + ([f"URL range: {slug_exp}"] if slug_exp else [])
 
             # Finding 1 Gate: Drop if minimum experience requirement exceeds ceiling or upper range exceeds ceiling
             max_upper = self.config.get("max_range_ceiling_years", 3.0 if self.max_experience_years <= 2 else None)
+            job_dict["experience_conflict"] = bool(slug_exp and body_exp != "Not Specified" and
+                self._within_ceiling(body_exp, self.max_experience_years, max_upper) !=
+                self._within_ceiling(slug_exp, self.max_experience_years, max_upper))
             if not self._within_ceiling(final_exp, max_years=self.max_experience_years, max_upper_years=max_upper):
                 self.last_run_stats["dropped_experience_ceiling"] += 1
                 continue

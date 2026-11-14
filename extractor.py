@@ -51,7 +51,7 @@ class JobRequirementExtractor:
         return matched_skills
 
     COMPANY_SUBJECT_MARKERS = [
-        "we have", "our company", "with over", "with more than",
+        "we have", "our company", "our firm", "with over", "with more than",
         "history of", "legacy of", "celebrating", "founded in", "established in",
         "in business for", "operating for", "in the last", "in the past",
         "over the last", "over the past", "for the last", "for the past",
@@ -93,9 +93,12 @@ class JobRequirementExtractor:
     )
 
     def extract_experience(self, description: str) -> str:
+        return self.extract_experience_details(description)["experience"]
+
+    def extract_experience_details(self, description: str) -> Dict[str, Any]:
         """Extract experience requirement (e.g. '0-2 years', '3–5 YOE', 'Fresher', 'Entry-Level')."""
         if not description or not isinstance(description, str):
-            return "Not Specified"
+            return {"experience": "Not Specified", "evidence": []}
 
         desc_lower = description.lower()
         req_verbs = (
@@ -124,11 +127,6 @@ class JobRequirementExtractor:
             rf'(?:{req_verbs}\s+(?:a\s+)?)(\d+(?:\.\d+)?\+?\s*{dash_or_to}\s*\d+(?:\.\d+)?\+?\s*{any_unit})',
             rf'(?:{req_verbs}\s+(?:a\s+)?)(\d+(?:\.\d+)?\+?\s*{any_unit}(?:\s+(?:of\s+)?(?:relevant\s+)?exp(?:erience)?)?)',
         ]
-        for p in req_prefixed_patterns:
-            for m in re.finditer(p, desc_lower):
-                if not is_non_experience_context(m.start(1), m.end(1), m.group(1)):
-                    return m.group(1).strip().title()
-
         # Tier 2: Unprefixed ranges (ranges are candidate requirements unless attached to bond/contract/heritage)
         range_patterns = [
             rf'(\d+(?:\.\d+)?\+?\s*{mo_unit}\s*{dash_or_to}\s*\d+(?:\.\d+)?\+?\s*{yr_unit})',
@@ -136,11 +134,6 @@ class JobRequirementExtractor:
             rf'(\d+(?:\.\d+)?\+?\s*{dash_or_to}\s*\d+(?:\.\d+)?\+?\s*{yr_unit})',
             rf'(\d+(?:\.\d+)?\+?\s*{dash_or_to}\s*\d+(?:\.\d+)?\+?\s*{mo_unit})',
         ]
-        for p in range_patterns:
-            for m in re.finditer(p, desc_lower):
-                if not is_non_experience_context(m.start(), m.end(), m.group(1)):
-                    return m.group(1).strip().title()
-
         # Tier 3: Unprefixed single/plus numbers (requires explicit exp/experience, '+' sign, or 'yoe')
         numeric_patterns = [
             rf'\b(\d+(?:\.\d+)?\+?\s*(?:years?|yrs?)\s+(?:in|of|with)\b)',
@@ -148,17 +141,41 @@ class JobRequirementExtractor:
             rf'\b(\d+(?:\.\d+)?\+\s*{any_unit})',
             rf'\b(\d+(?:\.\d+)?\+?\s*yoe)\b',
         ]
-        for p in numeric_patterns:
-            for m in re.finditer(p, desc_lower):
-                if not is_non_experience_context(m.start(), m.end(), m.group(1)):
-                    return m.group(1).strip().title()
+        # Gather all candidate requirements; an early skill-specific minimum must
+        # not hide a later, higher overall requirement. Longest overlapping match wins.
+        candidates = []
+        for pattern in req_prefixed_patterns + range_patterns + numeric_patterns:
+            for match in re.finditer(pattern, desc_lower):
+                start, end = match.span(1)
+                if is_non_experience_context(start, end, match.group(1)):
+                    continue
+                # Preference language applies to its local clause, not other requirements.
+                before = re.split(r"[.;\n]|\b(?:and|but)\b", desc_lower[:start])[-1]
+                after = re.split(r"[.;\n]|\b(?:and|but)\b", desc_lower[end:])[0]
+                if re.search(r"\b(?:preferred|preferably|desirable|optional|nice[- ]to[- ]have)\b", before + " " + after):
+                    continue
+                excerpt = description[max(0, start - 60):min(len(description), end + 100)].strip()
+                candidates.append((start, end, match.group(1).strip().title(), excerpt))
+        requirements = []
+        evidence = []
+        covered_until = -1
+        for start, end, value, excerpt in sorted(candidates, key=lambda item: (item[0], -item[1])):
+            if start < covered_until:
+                continue
+            covered_until = end
+            if value not in requirements:
+                requirements.append(value)
+            if excerpt not in evidence:
+                evidence.append(excerpt)
+        if requirements:
+            return {"experience": "; ".join(requirements), "evidence": evidence}
 
         # Tier 4: Fresher / Entry keywords (only when no valid numeric requirement was found)
         if not self.NEGATIVE_FRESHER_PATTERN.search(desc_lower):
             if re.search(r'\b(fresher|freshers|entry[-\s]?level|new grad|college graduate|intern|internship|trainee)\b', desc_lower):
-                return "0 - 1 Yrs (Entry / Fresher)"
+                return {"experience": "0 - 1 Yrs (Entry / Fresher)", "evidence": []}
 
-        return "Not Specified"
+        return {"experience": "Not Specified", "evidence": []}
 
     @staticmethod
     def _safe_str(val: Any) -> str:
@@ -224,12 +241,13 @@ class JobRequirementExtractor:
         is_remote = True if is_remote_val is True or str(is_remote_val).lower() == "true" else False if is_remote_val is False or str(is_remote_val).lower() == "false" else None
 
         extracted_skills = self.extract_skills(description)
-        experience = self.extract_experience(description)
+        experience = self.extract_experience_details(description)
         work_mode = self.extract_work_mode(location, description, is_remote=is_remote)
 
         return {
             "skills": ", ".join(extracted_skills) if extracted_skills else "General Technical Skills",
             "skills_count": len(extracted_skills),
-            "experience": experience,
+            "experience": experience["experience"],
+            "experience_evidence": experience["evidence"],
             "work_mode": work_mode
         }
