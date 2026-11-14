@@ -95,8 +95,17 @@ class MultiPlatformJobScraper:
             "fc_candidates": 0,
             "fc_markdown_hits": 0,
             "fc_retained": 0,
+            "fc_retained_pre_ai": 0,
+            "fc_errors": 0,
+            "fc_queries_attempted": 0,
+            "fc_queries_successful": 0,
             "jobspy_candidates": 0,
             "jobspy_retained": 0,
+            "jobspy_retained_pre_ai": 0,
+            "jobspy_errors": 0,
+            "jobspy_queries_attempted": 0,
+            "jobspy_queries_successful": 0,
+            "queries_attempted": 0,
             "dropped_stale_naukri": 0,
             "dropped_future_naukri": 0,
             "unparseable_naukri_dates": 0,
@@ -223,10 +232,16 @@ class MultiPlatformJobScraper:
         self.last_run_stats["fc_candidates"] = 0
         self.last_run_stats["fc_markdown_hits"] = 0
         self.last_run_stats["fc_retained"] = 0
+        self.last_run_stats["fc_retained_pre_ai"] = 0
         self.last_run_stats["fc_errors"] = 0
+        self.last_run_stats["fc_queries_attempted"] = 0
+        self.last_run_stats["fc_queries_successful"] = 0
         self.last_run_stats["jobspy_candidates"] = 0
         self.last_run_stats["jobspy_retained"] = 0
+        self.last_run_stats["jobspy_retained_pre_ai"] = 0
         self.last_run_stats["jobspy_errors"] = 0
+        self.last_run_stats["jobspy_queries_attempted"] = 0
+        self.last_run_stats["jobspy_queries_successful"] = 0
         self.last_run_stats["queries_attempted"] = 0
         self.last_run_stats["dropped_stale_naukri"] = 0
         self.last_run_stats["dropped_future_naukri"] = 0
@@ -259,6 +274,7 @@ class MultiPlatformJobScraper:
             print(f"[*] [Scraping] Searching for '{title}' in '{location}' across {platforms}...")
             try:
                 self.last_run_stats["queries_attempted"] += 1
+                self.last_run_stats["jobspy_queries_attempted"] = self.last_run_stats.get("jobspy_queries_attempted", 0) + 1
                 jobs_df = scrape_jobs(
                     site_name=platforms,
                     search_term=title,
@@ -269,6 +285,7 @@ class MultiPlatformJobScraper:
                     fetch_description=True,
                     verbose=0
                 )
+                self.last_run_stats["jobspy_queries_successful"] = self.last_run_stats.get("jobspy_queries_successful", 0) + 1
 
                 if jobs_df is not None and not jobs_df.empty:
                     self.last_run_stats["jobspy_candidates"] += len(jobs_df)
@@ -308,9 +325,13 @@ class MultiPlatformJobScraper:
 
         # Record exact per-engine retention statistics
         if "_source_engine" in enriched_df.columns:
-            self.last_run_stats["fc_retained"] = int((enriched_df["_source_engine"] == "firecrawl").sum())
-            self.last_run_stats["jobspy_retained"] = int((enriched_df["_source_engine"] == "jobspy").sum())
-            enriched_df.drop(columns=["_source_engine"], inplace=True)
+            fc_count = int((enriched_df["_source_engine"] == "firecrawl").sum())
+            jobspy_count = int((enriched_df["_source_engine"] == "jobspy").sum())
+            self.last_run_stats["fc_retained"] = fc_count
+            self.last_run_stats["jobspy_retained"] = jobspy_count
+            self.last_run_stats["fc_retained_pre_ai"] = fc_count
+            self.last_run_stats["jobspy_retained_pre_ai"] = jobspy_count
+            # Note: _source_engine is preserved so downstream (main.py) can reconcile post-AI counts
 
         return enriched_df
 
@@ -349,6 +370,7 @@ class MultiPlatformJobScraper:
 
         try:
             self.last_run_stats["queries_attempted"] = self.last_run_stats.get("queries_attempted", 0) + 1
+            self.last_run_stats["fc_queries_attempted"] = self.last_run_stats.get("fc_queries_attempted", 0) + 1
             print(f"   [Firecrawl v2] Querying '{title}' (\"{location}\")...")
             res = requests.post(
                 "https://api.firecrawl.dev/v2/search",
@@ -359,6 +381,7 @@ class MultiPlatformJobScraper:
 
             if res.status_code == 402:
                 print("   [!] Firecrawl credits depleted (HTTP 402 Payment Required). Continuing with local JobSpy.")
+                self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
                 return pd.DataFrame()
 
             if res.status_code == 429:
@@ -383,6 +406,7 @@ class MultiPlatformJobScraper:
                 self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
                 return pd.DataFrame()
 
+            self.last_run_stats["fc_queries_successful"] = self.last_run_stats.get("fc_queries_successful", 0) + 1
             raw_data = res.json().get("data", {})
             items = raw_data.get("web", []) if isinstance(raw_data, dict) else (raw_data if isinstance(raw_data, list) else [])
 

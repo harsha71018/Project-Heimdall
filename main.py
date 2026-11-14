@@ -283,8 +283,10 @@ def main():
 
         # Reconcile per-engine retention counts after AI filtering
         if "_source_engine" in enriched_jobs_df.columns:
-            scraper.last_run_stats["fc_retained"] = int((enriched_jobs_df["_source_engine"] == "firecrawl").sum())
-            scraper.last_run_stats["jobspy_retained"] = int((enriched_jobs_df["_source_engine"] == "jobspy").sum())
+            fc_post_ai = int((enriched_jobs_df["_source_engine"] == "firecrawl").sum())
+            jobspy_post_ai = int((enriched_jobs_df["_source_engine"] == "jobspy").sum())
+            scraper.last_run_stats["fc_retained"] = fc_post_ai
+            scraper.last_run_stats["jobspy_retained"] = jobspy_post_ai
             enriched_jobs_df.drop(columns=["_source_engine"], inplace=True)
 
         # Post-flight Credit Check & Delta Computation
@@ -338,14 +340,13 @@ def main():
 
         if enriched_jobs_df.empty:
             total_raw_candidates = fc_candidates + jobspy_candidates
-            fc_errors = stats.get("fc_errors", 0)
-            jobspy_errors = stats.get("jobspy_errors", 0)
-            use_firecrawl = config.get("firecrawl", {}).get("enabled", True) and bool(os.getenv("FIRECRAWL_API_KEY"))
-            all_sources_failed = (
-                total_raw_candidates == 0 and
-                jobspy_errors > 0 and
-                (not use_firecrawl or fc_errors > 0)
-            )
+            fc_successful = stats.get("fc_queries_successful", 0)
+            jobspy_successful = stats.get("jobspy_queries_successful", 0)
+            has_any_successful_query = (fc_successful + jobspy_successful) > 0
+
+            # An execution is classified as a source failure ONLY if zero raw candidates were gathered
+            # AND not a single query succeeded cleanly across any enabled platform
+            all_sources_failed = (total_raw_candidates == 0) and not has_any_successful_query
 
             print("\n" + "=" * 70)
             if all_sources_failed:

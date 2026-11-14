@@ -445,6 +445,8 @@ class ExcelDashboardGenerator:
         """
         save_stable = False
         stamp_rows = []
+        if jobs_df is not None and "_source_engine" in jobs_df.columns:
+            jobs_df = jobs_df.drop(columns=["_source_engine"])
         if output_path is not None:
             primary_target = output_path
         else:

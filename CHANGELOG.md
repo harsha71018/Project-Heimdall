@@ -14,9 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Zero-Match Tracker Refresh**: When scraping sources succeed but return zero matching leads, `Tracker_Latest.xlsx` is refreshed with an empty state and fresh timestamp instead of leaving yesterday's stale listings.
 - **Closed-Job Pre-Filter**: Scans description text for `"No longer accepting applications"` and `"Job has expired"`, dropping dead postings before AI or Excel export.
 - **Telemetry Schema v5**: Added `dropped_closed_job` to `RUN_LOG_HEADERS` (15 columns) with full backward compatibility across legacy v1–v4 schemas.
-- **Automated Regression Suite (60 Tests)**: Expanded test suite to 60 automated unit tests covering credential isolation, malformed AI responses, NaN handling, conflict precedence, and profile isolation.
+- **Automated Regression Suite (63 Tests)**: Expanded test suite to 63 automated unit tests covering credential isolation, malformed AI responses, NaN handling, conflict precedence, profile isolation, post-AI source count reconciliation, and failed-source classification.
 
 ### Fixed
+- **Post-AI Source Count Reconciliation**: Preserved `_source_engine` through scraper enrichment until after AI gatekeeper filtering, ensuring `fc_retained` + `jobspy_retained` perfectly reconciles with `total_unique_jobs` in telemetry and console summaries.
+- **Strict Source Failure Classification**: Explicitly tracked per-engine query attempts and successes. Firecrawl HTTP 402 now increments error counts; runs experiencing source failures that gather zero leads exit with code 1 and refrain from refreshing the empty tracker.
+- **Test Isolation & Stale Value Precedence Regression**: Wrapped AI Gatekeeper tests in credential-isolated environments to prevent outbound network calls, and strengthened archive regression tests using stale non-default (`Applied`) primary values.
 - **Missing Location Crash**: Fixed `AttributeError: 'float' object has no attribute 'strip'` on NaN location/description values in `extractor.py`.
 - **Credential Separation**: Removed erroneous `GEMINI_API_KEY` fallback in OpenRouter client to prevent credential cross-talk.
 - **Title Filtering Refinement**: Allowed entry-level consulting titles (`Graduate Data Analytics Consultant`, `Associate Consultant`, `Trainee Consultant`) while continuing to reject senior/lead/package consultants.

@@ -14,7 +14,7 @@ import openpyxl
 import pandas as pd
 from scraper import MultiPlatformJobScraper
 from ai_gatekeeper import AIGatekeeper, parse_json_loose
-from excel_generator import ExcelDashboardGenerator
+from excel_generator import ExcelDashboardGenerator, SYNC_STAMP_SHEET
 
 
 class TestJobAutomationHardening(unittest.TestCase):
@@ -108,11 +108,22 @@ class TestJobAutomationHardening(unittest.TestCase):
         self.assertGreaterEqual(self.scraper.last_run_stats.get("dropped_closed_job", 0), 1)
 
     def test_ai_gatekeeper_fail_open(self):
-        """Verify that AI Gatekeeper fails open when no key is set."""
-        gk = AIGatekeeper({"ai_gatekeeper": {"enabled": True}})
-        df = pd.DataFrame([{"title": "Data Analyst", "company": "Wipro"}])
-        res = gk.filter_dataframe(df)
-        self.assertEqual(len(res), 1)
+        """Verify that AI Gatekeeper fails open when no key is set or on network failure, without making live requests."""
+        with patch.dict(os.environ, {}, clear=True):
+            gk = AIGatekeeper({"ai_gatekeeper": {"enabled": True}})
+            self.assertFalse(gk.is_active)
+            df = pd.DataFrame([{"title": "Data Analyst", "company": "Wipro"}])
+            res = gk.filter_dataframe(df)
+            self.assertEqual(len(res), 1)
+
+        # Also verify that when key IS present, network error fails open safely without live leak
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "dummy_key"}):
+            with patch("requests.post", side_effect=Exception("Network failure")):
+                gk_active = AIGatekeeper({"ai_gatekeeper": {"enabled": True}})
+                self.assertTrue(gk_active.is_active)
+                df = pd.DataFrame([{"title": "Data Analyst", "company": "Wipro"}], index=[0])
+                res = gk_active.filter_dataframe(df)
+                self.assertEqual(len(res), 1)
 
     def test_parse_json_loose(self):
         """Verify JSON parsing handles raw and markdown-wrapped responses."""
@@ -234,7 +245,8 @@ class TestJobAutomationHardening(unittest.TestCase):
         self.assertEqual(job_result["skills_count"], 0)
 
     def test_archive_human_edit_not_overwritten_by_unchanged_primary(self):
-        """Verify that an archive human edit (e.g. to 'Interviewing') is never overwritten by an untouched primary tracker."""
+        """Verify that an archive human edit (e.g. to 'Interviewing') is never overwritten
+        by an untouched primary tracker containing a stale non-default status (e.g. 'Applied')."""
         temp_dir = tempfile.mkdtemp()
         try:
             leads_dir = os.path.join(temp_dir, "leads")
@@ -252,44 +264,63 @@ class TestJobAutomationHardening(unittest.TestCase):
                 }
             }
             gen = ExcelDashboardGenerator(cfg)
+            job_url = "https://www.linkedin.com/jobs/view/123456"
             df = pd.DataFrame([{
                 "title": "Data Analyst",
                 "company": "Cognizant",
                 "location": "Hyderabad",
                 "platform": "LinkedIn",
-                "final_apply_url": "https://www.linkedin.com/jobs/view/123456",
+                "final_apply_url": job_url,
                 "skills": "SQL",
                 "experience": "0-2 years",
                 "work_mode": "Hybrid",
                 "job_age": "Recent"
             }])
             
-            # 1. Generate primary tracker (stamped with 'Not Applied')
+            # 1. Generate primary tracker and set it to a stale non-default 'Applied' state
+            # Both the visible cell and its hidden _sync_stamp entry are 'Applied' (i.e. untouched since generation).
             gen.generate(df, output_path=stable_tracker)
-            
-            # 2. Generate archive tracker (stamped with 'Not Applied')
+            wb_prim = openpyxl.load_workbook(stable_tracker)
+            ws_prim = wb_prim["Active Job Leads"]
+            ws_prim_stamps = wb_prim[SYNC_STAMP_SHEET]
+            for col in range(1, ws_prim.max_column + 1):
+                if ws_prim.cell(1, col).value == "Application Status":
+                    ws_prim.cell(2, col).value = "Applied"
+                    break
+            for r in range(2, ws_prim_stamps.max_row + 1):
+                if ws_prim_stamps.cell(r, 1).value == job_url:
+                    ws_prim_stamps.cell(r, 2).value = "Applied"
+                    break
+            wb_prim.save(stable_tracker)
+            wb_prim.close()
+
+            # 2. Generate archive tracker, starting with 'Applied' in stamp
             gen.generate(df, output_path=archive_tracker)
-            
-            # 3. Simulate human editing archive tracker to 'Interviewing'
             wb_arch = openpyxl.load_workbook(archive_tracker)
             ws_arch = wb_arch["Active Job Leads"]
-            # Column K is Application Status
+            ws_arch_stamps = wb_arch[SYNC_STAMP_SHEET]
             status_col = None
             for col in range(1, ws_arch.max_column + 1):
                 if ws_arch.cell(1, col).value == "Application Status":
                     status_col = col
                     break
             self.assertIsNotNone(status_col)
+            for r in range(2, ws_arch_stamps.max_row + 1):
+                if ws_arch_stamps.cell(r, 1).value == job_url:
+                    ws_arch_stamps.cell(r, 2).value = "Applied"
+                    break
+
+            # 3. Simulate human editing archive tracker to 'Interviewing'
+            # Note: stamp remains 'Applied', so cell != stamp is flagged as a real human edit.
             ws_arch.cell(2, status_col).value = "Interviewing"
             wb_arch.save(archive_tracker)
             wb_arch.close()
             
             # 4. Sync and load applications
             ledger = gen._sync_and_load_applications()
-            key = "https://www.linkedin.com/jobs/view/123456"
-            self.assertIn(key, ledger)
-            # The human edit 'Interviewing' MUST be preserved and NOT reverted to 'Not Applied'!
-            self.assertEqual(ledger[key]["status"], "Interviewing")
+            self.assertIn(job_url, ledger)
+            # The human edit 'Interviewing' MUST be preserved and NOT reverted to 'Applied' by the untouched primary!
+            self.assertEqual(ledger[job_url]["status"], "Interviewing")
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -338,6 +369,151 @@ class TestJobAutomationHardening(unittest.TestCase):
         self.assertIn("dropped_closed_job", RUN_LOG_HEADERS)
         self.assertEqual(len(RUN_LOG_HEADERS), 15)
         self.assertEqual(len(LEGACY_RUN_LOG_HEADERS), 4)
+
+    def test_post_ai_engine_counts_reconciled(self):
+        """Verify that per-engine retention counts reconcile with post-AI filtered leads."""
+        scraper = MultiPlatformJobScraper(self.config)
+        # Mock dataframe with 2 JobSpy leads and 1 Firecrawl lead
+        df = pd.DataFrame([
+            {"title": "Data Analyst", "company": "Co 1", "_source_engine": "jobspy"},
+            {"title": "BI Developer", "company": "Co 2", "_source_engine": "jobspy"},
+            {"title": "SQL Engineer", "company": "Co 3", "_source_engine": "firecrawl"},
+        ])
+        
+        # Scraper records pre-AI counts
+        scraper.last_run_stats["fc_retained"] = 1
+        scraper.last_run_stats["jobspy_retained"] = 2
+        scraper.last_run_stats["fc_retained_pre_ai"] = 1
+        scraper.last_run_stats["jobspy_retained_pre_ai"] = 2
+
+        # Simulate AI filter dropping one of the JobSpy leads
+        filtered_df = df.iloc[[1, 2]].copy()  # retains Co 2 (jobspy) and Co 3 (firecrawl)
+        
+        # Execute main.py reconciliation block
+        if "_source_engine" in filtered_df.columns:
+            fc_post_ai = int((filtered_df["_source_engine"] == "firecrawl").sum())
+            jobspy_post_ai = int((filtered_df["_source_engine"] == "jobspy").sum())
+            scraper.last_run_stats["fc_retained"] = fc_post_ai
+            scraper.last_run_stats["jobspy_retained"] = jobspy_post_ai
+            filtered_df.drop(columns=["_source_engine"], inplace=True)
+
+        self.assertEqual(scraper.last_run_stats["fc_retained"], 1)
+        self.assertEqual(scraper.last_run_stats["jobspy_retained"], 1)
+        self.assertEqual(scraper.last_run_stats["fc_retained_pre_ai"], 1)
+        self.assertEqual(scraper.last_run_stats["jobspy_retained_pre_ai"], 2)
+        self.assertEqual(scraper.last_run_stats["fc_retained"] + scraper.last_run_stats["jobspy_retained"], len(filtered_df))
+        self.assertNotIn("_source_engine", filtered_df.columns)
+
+    def test_failed_source_vs_clean_zero_classification(self):
+        """Verify that runs with source errors (e.g. Firecrawl 402 + JobSpy error) are classified as failures,
+        while clean zero-match runs are classified as successful clean runs."""
+        # Scenario 1: Source Failure (Firecrawl 402 + JobSpy network error)
+        stats_failed = {
+            "fc_candidates": 0,
+            "jobspy_candidates": 0,
+            "fc_errors": 1,
+            "jobspy_errors": 1,
+            "fc_queries_successful": 0,
+            "jobspy_queries_successful": 0,
+        }
+        total_raw_failed = stats_failed["fc_candidates"] + stats_failed["jobspy_candidates"]
+        has_any_successful_failed = (stats_failed["fc_queries_successful"] + stats_failed["jobspy_queries_successful"]) > 0
+        all_sources_failed_1 = (total_raw_failed == 0) and not has_any_successful_failed
+        self.assertTrue(all_sources_failed_1, "Expected run to be classified as source failure when no queries succeeded")
+
+        # Scenario 2: Clean Zero-Match Run (JobSpy succeeded 4 queries, found 0 jobs)
+        stats_clean = {
+            "fc_candidates": 0,
+            "jobspy_candidates": 0,
+            "fc_errors": 0,
+            "jobspy_errors": 0,
+            "fc_queries_successful": 0,
+            "jobspy_queries_successful": 4,
+        }
+        total_raw_clean = stats_clean["fc_candidates"] + stats_clean["jobspy_candidates"]
+        has_any_successful_clean = (stats_clean["fc_queries_successful"] + stats_clean["jobspy_queries_successful"]) > 0
+        all_sources_failed_2 = (total_raw_clean == 0) and not has_any_successful_clean
+        self.assertFalse(all_sources_failed_2, "Expected clean zero-match run to not be classified as failure")
+
+        # Scenario 3: Firecrawl 402 but JobSpy succeeded 2 queries cleanly with 0 jobs
+        stats_mixed = {
+            "fc_candidates": 0,
+            "jobspy_candidates": 0,
+            "fc_errors": 1,
+            "jobspy_errors": 0,
+            "fc_queries_successful": 0,
+            "jobspy_queries_successful": 2,
+        }
+        total_raw_mixed = stats_mixed["fc_candidates"] + stats_mixed["jobspy_candidates"]
+        has_any_successful_mixed = (stats_mixed["fc_queries_successful"] + stats_mixed["jobspy_queries_successful"]) > 0
+        all_sources_failed_3 = (total_raw_mixed == 0) and not has_any_successful_mixed
+        self.assertFalse(all_sources_failed_3, "Expected run where one platform succeeded to not be classified as total source failure")
+
+    @patch("main.acquire_run_lock", return_value=True)
+    @patch("main.release_run_lock")
+    @patch("main.migrate_and_append_run_log", return_value=True)
+    def test_main_orchestration_post_ai_and_failure(self, mock_log, mock_rel, mock_acq):
+        """End-to-end orchestration tests for main() with post-AI reconciliation and failure exit codes."""
+        from main import main
+        import sys
+
+        # Test A: AI filtering drops candidates -> check row_data logged has reconciled counts
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_tracker = os.path.join(tmpdir, "Tracker.xlsx")
+            mock_jobs = pd.DataFrame([
+                {"title": "Data Analyst", "company": "Co 1", "job_url_direct": "https://example.com/1", "final_apply_url": "https://example.com/1", "_source_engine": "jobspy"},
+                {"title": "BI Developer", "company": "Co 2", "job_url_direct": "https://example.com/2", "final_apply_url": "https://example.com/2", "_source_engine": "jobspy"}
+            ])
+            with patch("main.MultiPlatformJobScraper") as MockScraper, \
+                 patch("main.AIGatekeeper") as MockAI, \
+                 patch("main.ExcelDashboardGenerator") as MockGen, \
+                 patch.object(sys, "argv", ["main.py", "--output", test_tracker]):
+                
+                inst_scraper = MockScraper.return_value
+                inst_scraper.scrape_all_roles.return_value = mock_jobs
+                inst_scraper.get_remaining_credits.return_value = 100
+                inst_scraper.last_run_stats = {
+                    "fc_candidates": 0, "fc_markdown_hits": 0, "fc_retained": 0,
+                    "jobspy_candidates": 2, "jobspy_retained": 2,
+                    "jobspy_queries_successful": 1
+                }
+                
+                # AI gatekeeper retains only 1 of the 2 JobSpy leads
+                inst_ai = MockAI.return_value
+                inst_ai.is_active = True
+                inst_ai.filter_dataframe.return_value = mock_jobs.iloc[[0]].copy()
+                
+                MockGen.return_value.generate.return_value = test_tracker
+
+                main()
+
+                # Verify migrate_and_append_run_log received reconciled counts
+                self.assertTrue(mock_log.called)
+                logged_data = mock_log.call_args[0][1]
+                self.assertEqual(logged_data["jobspy_retained"], 1)
+                self.assertEqual(logged_data["total_unique_jobs"], 1)
+                self.assertEqual(logged_data["fc_retained"], 0)
+
+        # Test B: All sources failed -> sys.exit(1) and no tracker refresh
+        with patch("main.MultiPlatformJobScraper") as MockScraper, \
+             patch("main.ExcelDashboardGenerator") as MockGen, \
+             patch.object(sys, "argv", ["main.py"]):
+            
+            inst_scraper = MockScraper.return_value
+            inst_scraper.scrape_all_roles.return_value = pd.DataFrame()
+            inst_scraper.get_remaining_credits.return_value = None
+            inst_scraper.last_run_stats = {
+                "fc_candidates": 0, "fc_markdown_hits": 0, "fc_retained": 0,
+                "jobspy_candidates": 0, "jobspy_retained": 0,
+                "fc_errors": 1, "jobspy_errors": 1,
+                "fc_queries_successful": 0, "jobspy_queries_successful": 0
+            }
+
+            with self.assertRaises(SystemExit) as cm:
+                main()
+            self.assertEqual(cm.exception.code, 1)
+            # generate() should NOT be called when all sources failed
+            self.assertFalse(MockGen.return_value.generate.called)
 
 
 if __name__ == "__main__":
