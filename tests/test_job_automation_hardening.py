@@ -515,6 +515,43 @@ class TestJobAutomationHardening(unittest.TestCase):
             # generate() should NOT be called when all sources failed
             self.assertFalse(MockGen.return_value.generate.called)
 
+        # Test C: Malformed HTTP 200 response from Firecrawl + JobSpy exception (real scraper lifecycle)
+        with patch.dict(os.environ, {"FIRECRAWL_API_KEY": "fc_test_key"}), \
+             patch("main.ExcelDashboardGenerator") as MockGen, \
+             patch("scraper.requests.post") as mock_fc_post, \
+             patch("scraper.scrape_jobs", side_effect=Exception("JobSpy network error")), \
+             patch("scraper.time.sleep"), \
+             patch.object(sys, "argv", ["main.py"]):
+            
+            # Firecrawl returns HTTP 200 with invalid JSON
+            mock_res = MagicMock()
+            mock_res.status_code = 200
+            mock_res.json.side_effect = ValueError("Invalid JSON response payload")
+            mock_fc_post.return_value = mock_res
+            
+            with self.assertRaises(SystemExit) as cm:
+                main()
+            
+            # Must exit with code 1 due to all sources failing
+            self.assertEqual(cm.exception.code, 1)
+            # Empty tracker must NOT be refreshed, preserving existing workbooks
+            self.assertFalse(MockGen.return_value.generate.called)
+
+    def test_firecrawl_malformed_200_counts_as_error_not_success(self):
+        """Verify that HTTP 200 with invalid JSON increments fc_errors and does NOT increment fc_queries_successful."""
+        scraper = MultiPlatformJobScraper(self.config)
+        scraper.firecrawl_api_key = "test_key"
+        
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.json.side_effect = ValueError("Invalid JSON from server")
+        
+        with patch("requests.post", return_value=mock_res):
+            df = scraper._scrape_with_firecrawl("Data Analyst", "Hyderabad")
+            self.assertTrue(df.empty)
+            self.assertEqual(scraper.last_run_stats.get("fc_queries_successful", 0), 0)
+            self.assertGreaterEqual(scraper.last_run_stats.get("fc_errors", 0), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

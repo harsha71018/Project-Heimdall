@@ -406,9 +406,37 @@ class MultiPlatformJobScraper:
                 self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
                 return pd.DataFrame()
 
+            # Attempt to decode JSON response safely
+            try:
+                raw_json = res.json()
+            except Exception as e:
+                print(f"   [!] Firecrawl response JSON decode failed: {e}")
+                self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
+                return pd.DataFrame()
+
+            if not isinstance(raw_json, dict):
+                print(f"   [!] Firecrawl returned non-dictionary root JSON structure: {type(raw_json)}")
+                self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
+                return pd.DataFrame()
+
+            if raw_json.get("success") is False:
+                err_msg = raw_json.get("error", "Unknown API error")
+                print(f"   [!] Firecrawl API returned unsuccessful status: {err_msg}")
+                self.last_run_stats["fc_errors"] = self.last_run_stats.get("fc_errors", 0) + 1
+                return pd.DataFrame()
+
+            raw_data = raw_json.get("data", {})
+            if isinstance(raw_data, dict):
+                items = raw_data.get("web", [])
+                if not isinstance(items, list):
+                    items = []
+            elif isinstance(raw_data, list):
+                items = raw_data
+            else:
+                items = []
+
+            # Only increment fc_queries_successful after JSON parsing and response-schema validation succeed
             self.last_run_stats["fc_queries_successful"] = self.last_run_stats.get("fc_queries_successful", 0) + 1
-            raw_data = res.json().get("data", {})
-            items = raw_data.get("web", []) if isinstance(raw_data, dict) else (raw_data if isinstance(raw_data, list) else [])
 
             self.last_run_stats["fc_candidates"] += len(items)
             self.last_run_stats["fc_markdown_hits"] += sum(
