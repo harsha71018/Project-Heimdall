@@ -7,7 +7,8 @@ Fails open: if no key is set or API is unreachable, it smoothly logs a notice an
 import os
 import json
 import re
-from typing import Dict, Any, List
+import math
+from typing import Dict, Any, List, Optional
 import requests
 import pandas as pd
 
@@ -40,13 +41,43 @@ class AIGatekeeper:
     def __init__(self, config: Dict[str, Any]):
         self.ai_cfg = config.get("ai_gatekeeper", {})
         self.enabled = self.ai_cfg.get("enabled", True)
-        self.api_key = os.getenv("OPENROUTER_API_KEY", "").strip() or os.getenv("GEMINI_API_KEY", "").strip()
+        self.api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
         self.provider = self.ai_cfg.get("provider", "openrouter").lower()
         self.model = self.ai_cfg.get("model", "nvidia/nemotron-3-ultra-550b-a55b:free")
         self.fallback_model = self.ai_cfg.get("fallback_model", "openrouter/free")
         self.min_fit_score = float(self.ai_cfg.get("min_fit_score", 6.0))
         self.target_titles = config.get("search", {}).get("job_titles", ["Data Analyst", "SQL Developer"])
         self.max_experience_years = config.get("search", {}).get("max_experience_years", 2)
+
+    @staticmethod
+    def _parse_bool(val: Any, default: bool = True) -> bool:
+        """Strictly and safely parses boolean values including string representations."""
+        if val is None:
+            return default
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        if isinstance(val, str):
+            s = val.strip().lower()
+            if s in ("false", "0", "no", "f", "off"):
+                return False
+            if s in ("true", "1", "yes", "t", "on"):
+                return True
+        return default
+
+    @staticmethod
+    def _parse_float(val: Any, default: float = 7.0) -> float:
+        """Safely parses float scores, gracefully defaulting on non-numeric or non-finite values."""
+        if val is None:
+            return default
+        try:
+            f = float(val)
+            if math.isnan(f) or math.isinf(f):
+                return default
+            return f
+        except (ValueError, TypeError):
+            return default
 
     @property
     def is_active(self) -> bool:
@@ -139,31 +170,43 @@ class AIGatekeeper:
             print("[!] Warning: AI Gatekeeper failed all attempts. Gracefully keeping Tier-1 filtered leads.")
             return df
 
-        parsed = parse_json_loose(raw_response_text)
-        if not parsed or "decisions" not in parsed:
-            print("[!] Warning: Could not parse AI Gatekeeper JSON response. Keeping Tier-1 leads.")
+        try:
+            parsed = parse_json_loose(raw_response_text)
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("decisions"), list):
+                print("[!] Warning: Could not parse AI Gatekeeper JSON response as a valid decisions list. Keeping Tier-1 leads.")
+                return df
+
+            raw_decisions = parsed.get("decisions") or []
+            decisions_map = {}
+            for d in raw_decisions:
+                if isinstance(d, dict) and "id" in d:
+                    try:
+                        dec_id = int(d["id"])
+                        decisions_map[dec_id] = d
+                    except (ValueError, TypeError):
+                        continue
+
+            keep_indices = []
+            dropped_count = 0
+            for idx in df.index:
+                dec = decisions_map.get(int(idx))
+                if not isinstance(dec, dict):
+                    # If specific ID was missing from response or malformed, fail-safe keep
+                    keep_indices.append(idx)
+                    continue
+
+                is_fresher = self._parse_bool(dec.get("is_fresher_eligible"), default=True)
+                is_domain = self._parse_bool(dec.get("is_domain_match"), default=True)
+                score = self._parse_float(dec.get("fit_score"), default=7.0)
+
+                if is_fresher and is_domain and score >= self.min_fit_score:
+                    keep_indices.append(idx)
+                else:
+                    dropped_count += 1
+
+            retained_df = df.loc[keep_indices].copy()
+            print(f"[+] [AI Gatekeeper] Retained {len(retained_df)} verified leads (Dropped {dropped_count} experienced/off-domain leads).")
+            return retained_df
+        except Exception as e:
+            print(f"[!] Warning: Exception during AI decision processing: {e}. Gracefully keeping Tier-1 leads.")
             return df
-
-        decisions_map = {d["id"]: d for d in parsed.get("decisions", []) if "id" in d}
-
-        keep_indices = []
-        dropped_count = 0
-        for idx in df.index:
-            dec = decisions_map.get(int(idx))
-            if not dec:
-                # If specific ID was missing from response, fail-safe keep
-                keep_indices.append(idx)
-                continue
-
-            is_fresher = dec.get("is_fresher_eligible", True)
-            is_domain = dec.get("is_domain_match", True)
-            score = float(dec.get("fit_score", 7.0))
-
-            if is_fresher and is_domain and score >= self.min_fit_score:
-                keep_indices.append(idx)
-            else:
-                dropped_count += 1
-
-        retained_df = df.loc[keep_indices].copy()
-        print(f"[+] [AI Gatekeeper] Retained {len(retained_df)} verified leads (Dropped {dropped_count} experienced/off-domain leads).")
-        return retained_df

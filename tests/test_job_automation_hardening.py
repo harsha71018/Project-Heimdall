@@ -1,4 +1,12 @@
 import unittest
+import os
+import shutil
+import tempfile
+import pandas as pd
+import openpyxl
+from unittest.mock import patch, MagicMock
+from extractor import JobRequirementExtractor
+from main import RUN_LOG_HEADERS, LEGACY_RUN_LOG_HEADERS
 import tempfile
 import shutil
 import os
@@ -149,6 +157,187 @@ class TestJobAutomationHardening(unittest.TestCase):
             self.assertNotIn("Co C", applied_companies)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+
+    def test_ai_gatekeeper_credential_isolation(self):
+        """Verify that AI Gatekeeper fails open cleanly without leaking environment credentials."""
+        with patch.dict(os.environ, {}, clear=True):
+            gk = AIGatekeeper({"ai_gatekeeper": {"enabled": True}})
+            self.assertFalse(gk.is_active)
+            df = pd.DataFrame([{"title": "Data Analyst", "company": "Wipro"}])
+            res = gk.filter_dataframe(df)
+            self.assertEqual(len(res), 1)
+
+    def test_ai_gatekeeper_malformed_fit_score(self):
+        """Verify that non-numeric fit_score (e.g. 'N/A') does not crash and defaults safely."""
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test_key"}):
+            gk = AIGatekeeper({"ai_gatekeeper": {"enabled": True}})
+            mock_res = MagicMock()
+            mock_res.status_code = 200
+            mock_res.json.return_value = {
+                "choices": [{
+                    "message": {
+                        "content": '{"decisions": [{"id": 0, "is_fresher_eligible": true, "is_domain_match": true, "fit_score": "N/A"}]}'
+                    }
+                }]
+            }
+            with patch("requests.post", return_value=mock_res):
+                df = pd.DataFrame([{"title": "Data Analyst", "company": "Wipro"}], index=[0])
+                res = gk.filter_dataframe(df)
+                self.assertEqual(len(res), 1)
+
+    def test_ai_gatekeeper_null_decisions(self):
+        """Verify that 'decisions': null does not raise TypeError and fails open."""
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test_key"}):
+            gk = AIGatekeeper({"ai_gatekeeper": {"enabled": True}})
+            mock_res = MagicMock()
+            mock_res.status_code = 200
+            mock_res.json.return_value = {
+                "choices": [{
+                    "message": {
+                        "content": '{"decisions": null}'
+                    }
+                }]
+            }
+            with patch("requests.post", return_value=mock_res):
+                df = pd.DataFrame([{"title": "Data Analyst", "company": "Wipro"}], index=[0])
+                res = gk.filter_dataframe(df)
+                self.assertEqual(len(res), 1)
+
+    def test_ai_gatekeeper_string_booleans(self):
+        """Verify that string booleans ('false', 'true') are strictly parsed and not evaluated as truthy strings."""
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test_key"}):
+            gk = AIGatekeeper({"ai_gatekeeper": {"enabled": True}})
+            mock_res = MagicMock()
+            mock_res.status_code = 200
+            mock_res.json.return_value = {
+                "choices": [{
+                    "message": {
+                        "content": '{"decisions": [{"id": 0, "is_fresher_eligible": "false", "is_domain_match": "true", "fit_score": 8.0}]}'
+                    }
+                }]
+            }
+            with patch("requests.post", return_value=mock_res):
+                df = pd.DataFrame([{"title": "Senior Data Analyst", "company": "BigCorp"}], index=[0])
+                res = gk.filter_dataframe(df)
+                self.assertEqual(len(res), 0)
+
+    def test_extractor_nan_location_and_description(self):
+        """Verify that float('nan') or None in location/description does not throw AttributeError."""
+        extractor = JobRequirementExtractor(["SQL", "Python"])
+        mode = extractor.extract_work_mode(float('nan'), float('nan'))
+        self.assertEqual(mode, "On-site")
+        
+        job_result = extractor.process_job({"location": float('nan'), "description": float('nan')})
+        self.assertEqual(job_result["work_mode"], "On-site")
+        self.assertEqual(job_result["skills_count"], 0)
+
+    def test_archive_human_edit_not_overwritten_by_unchanged_primary(self):
+        """Verify that an archive human edit (e.g. to 'Interviewing') is never overwritten by an untouched primary tracker."""
+        temp_dir = tempfile.mkdtemp()
+        try:
+            leads_dir = os.path.join(temp_dir, "leads")
+            os.makedirs(leads_dir, exist_ok=True)
+            stable_tracker = os.path.join(temp_dir, "Tracker_Latest.xlsx")
+            archive_tracker = os.path.join(leads_dir, "Job_Leads_2026-10-14_011000.xlsx")
+            apps_file = os.path.join(temp_dir, "applications.json")
+            
+            cfg = {
+                "output": {
+                    "leads_dir": leads_dir,
+                    "stable_filename": stable_tracker,
+                    "applications_file": apps_file,
+                    "seen_jobs_file": os.path.join(temp_dir, "seen.json"),
+                }
+            }
+            gen = ExcelDashboardGenerator(cfg)
+            df = pd.DataFrame([{
+                "title": "Data Analyst",
+                "company": "Cognizant",
+                "location": "Hyderabad",
+                "platform": "LinkedIn",
+                "final_apply_url": "https://www.linkedin.com/jobs/view/123456",
+                "skills": "SQL",
+                "experience": "0-2 years",
+                "work_mode": "Hybrid",
+                "job_age": "Recent"
+            }])
+            
+            # 1. Generate primary tracker (stamped with 'Not Applied')
+            gen.generate(df, output_path=stable_tracker)
+            
+            # 2. Generate archive tracker (stamped with 'Not Applied')
+            gen.generate(df, output_path=archive_tracker)
+            
+            # 3. Simulate human editing archive tracker to 'Interviewing'
+            wb_arch = openpyxl.load_workbook(archive_tracker)
+            ws_arch = wb_arch["Active Job Leads"]
+            # Column K is Application Status
+            status_col = None
+            for col in range(1, ws_arch.max_column + 1):
+                if ws_arch.cell(1, col).value == "Application Status":
+                    status_col = col
+                    break
+            self.assertIsNotNone(status_col)
+            ws_arch.cell(2, status_col).value = "Interviewing"
+            wb_arch.save(archive_tracker)
+            wb_arch.close()
+            
+            # 4. Sync and load applications
+            ledger = gen._sync_and_load_applications()
+            key = "https://www.linkedin.com/jobs/view/123456"
+            self.assertIn(key, ledger)
+            # The human edit 'Interviewing' MUST be preserved and NOT reverted to 'Not Applied'!
+            self.assertEqual(ledger[key]["status"], "Interviewing")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_primary_tracker_isolation_ignores_other_profiles(self):
+        """Verify that Tracker_Latest_IT_Support.xlsx is strictly ignored by the main tracker scanner."""
+        temp_dir = tempfile.mkdtemp()
+        try:
+            stable_tracker = os.path.join(temp_dir, "Tracker_Latest.xlsx")
+            it_support_tracker = os.path.join(temp_dir, "Tracker_Latest_IT_Support.xlsx")
+            
+            wb1 = openpyxl.Workbook()
+            wb1.save(stable_tracker)
+            wb1.close()
+            
+            wb2 = openpyxl.Workbook()
+            wb2.save(it_support_tracker)
+            wb2.close()
+            
+            cfg = {
+                "output": {
+                    "leads_dir": os.path.join(temp_dir, "leads"),
+                    "stable_filename": stable_tracker,
+                    "applications_file": os.path.join(temp_dir, "apps.json"),
+                    "seen_jobs_file": os.path.join(temp_dir, "seen.json"),
+                }
+            }
+            gen = ExcelDashboardGenerator(cfg)
+            candidates = [p for p, is_prim in gen._get_ordered_sync_candidates()]
+            self.assertIn(stable_tracker, candidates)
+            self.assertNotIn(it_support_tracker, candidates)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_consultant_title_handling(self):
+        """Verify that entry-level consultant titles are kept while senior consultants are dropped."""
+        self.assertFalse(self.scraper._is_senior_title("Graduate Data Analytics Consultant"))
+        self.assertFalse(self.scraper._is_senior_title("Associate Consultant"))
+        self.assertFalse(self.scraper._is_senior_title("Trainee Consultant"))
+        self.assertFalse(self.scraper._is_senior_title("Junior Consultant"))
+        self.assertTrue(self.scraper._is_senior_title("Senior Consultant"))
+        self.assertTrue(self.scraper._is_senior_title("Lead Consultant"))
+        self.assertTrue(self.scraper._is_senior_title("Package Consultant"))
+
+    def test_run_log_headers_has_dropped_closed_job(self):
+        """Verify that dropped_closed_job is in RUN_LOG_HEADERS and legacy schemas are preserved."""
+        self.assertIn("dropped_closed_job", RUN_LOG_HEADERS)
+        self.assertEqual(len(RUN_LOG_HEADERS), 15)
+        self.assertEqual(len(LEGACY_RUN_LOG_HEADERS), 4)
 
 
 if __name__ == "__main__":

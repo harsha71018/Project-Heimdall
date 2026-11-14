@@ -420,11 +420,12 @@ class MultiPlatformJobScraper:
 
                 markdown = (item.get("markdown") or "").strip()
                 body = markdown if (self.deep_scrape and markdown) else desc
+                confirmed_loc = self._extract_location_from_metadata(url, f"{title_raw} {desc}", default_loc=location)
 
                 rows.append({
                     "company": company,
                     "title": role,
-                    "location": location,
+                    "location": confirmed_loc,
                     "site": site,
                     "job_url": url,
                     "job_url_direct": url,
@@ -619,6 +620,16 @@ class MultiPlatformJobScraper:
                 return bool(re.fullmatch(pattern, path, re.IGNORECASE))
 
         return False
+
+    def _extract_location_from_metadata(self, url: str, text: str, default_loc: str) -> str:
+        """Extracts confirmed city from URL slug or text, falling back to search location."""
+        combined = f"{url.lower()} {text.lower()}"
+        for city in self.KNOWN_CITIES:
+            if city in ('india', 'hybrid', 'remote'):
+                continue
+            if re.search(rf'\b{re.escape(city)}\b', combined):
+                return city.title()
+        return default_loc
 
     def _extract_clean_metadata(self, raw_title: str, url: str, site: str) -> Tuple[str, str]:
         """Extracts clean Role Title and actual Company Name from the URL and title text."""
@@ -853,6 +864,9 @@ class MultiPlatformJobScraper:
         clean_title = self.NON_SENIOR_FALSE_POSITIVES_RE.sub(" ", clean_title)
         if bool(self.SENIOR_TITLE_PATTERN.search(clean_title)):
             return True
+        # Allow entry-level consultant roles (e.g. Graduate Data Analytics Consultant, Associate Consultant)
+        if re.search(r'\b(?:associate|graduate|trainee|junior|entry[\s-]level)\s+(?:[a-z]+\s+)*consultant\b', clean_title):
+            return False
         if bool(self.EXCLUDED_TITLE_PATTERN.search(clean_title)):
             return True
         return False

@@ -1,4 +1,5 @@
 import re
+import math
 from typing import List, Dict, Any, Optional
 
 
@@ -159,20 +160,32 @@ class JobRequirementExtractor:
 
         return "Not Specified"
 
-    def extract_work_mode(self, location: str, description: str, is_remote: Optional[bool] = None) -> str:
+    @staticmethod
+    def _safe_str(val: Any) -> str:
+        """Safely sanitizes any value (including NaN, None, numbers) into clean string."""
+        if val is None:
+            return ""
+        if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+            return ""
+        if isinstance(val, str):
+            return val.strip()
+        return str(val).strip()
+
+    def extract_work_mode(self, location: Any, description: Any, is_remote: Optional[bool] = None) -> str:
         """
         Determine if job is Remote, Hybrid, or On-site.
         Guards against:
         - JobSpy is_remote boolean field
         - Negation ('not remote', 'non-remote', 'no remote')
         - Technical duties ('remote support', 'remote desktop', 'remote troubleshooting')
+        - NaN / non-string location or description values
         """
         if is_remote is True:
             return "Remote"
 
-        loc_clean = (location or "").strip()
+        loc_clean = self._safe_str(location)
         loc_lower = loc_clean.lower()
-        desc_clean = description.strip() if isinstance(description, str) else ""
+        desc_clean = self._safe_str(description)
         desc_lower = desc_clean.lower()
         combined_text = f"{loc_lower} {desc_lower}"
 
@@ -205,8 +218,8 @@ class JobRequirementExtractor:
 
     def process_job(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """Enrich a single raw job dictionary with extracted metrics."""
-        description = job_data.get("description", "")
-        location = job_data.get("location", "")
+        description = self._safe_str(job_data.get("description", ""))
+        location = self._safe_str(job_data.get("location", ""))
         is_remote_val = job_data.get("is_remote")
         is_remote = True if is_remote_val is True or str(is_remote_val).lower() == "true" else False if is_remote_val is False or str(is_remote_val).lower() == "false" else None
 

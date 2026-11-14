@@ -378,7 +378,7 @@ Project-Heimdall/
 ├── seen_jobs.json            # Persistent URL ledger with 45-day rolling pruning
 ├── applications.json         # Persistent application status & notes ledger
 ├── run_log.csv               # Historical telemetry: timestamp, mode, credits, candidates, drops
-└── tests/                    # Unit and regression test suite (51 passing tests)
+└── tests/                    # Unit and regression test suite (60 passing tests)
     ├── test_phase2.py
     ├── test_refinements.py
     ├── test_experience_order.py
@@ -401,7 +401,7 @@ Project-Heimdall/
 
 ## 🧪 Testing & Production Verification
 
-The entire codebase is verified by **51 automated unit and acceptance tests** covering URL validation, date bounds, ceiling range-blanking, closed posting detection, AI fail-open classification, atomic persistence, formula injection protection, hidden provenance stamps, Kanban memory persistence, multi-tab sync, archive resurrection prevention, and multi-file sync precedence.
+The entire codebase is verified by **60 automated unit and acceptance tests** covering URL validation, date bounds, ceiling range-blanking, closed posting detection, AI fail-open classification, string-boolean and NaN sanitization, conflict precedence preservation, atomic persistence, formula injection protection, hidden provenance stamps, Kanban memory persistence, multi-tab sync, archive resurrection prevention, and multi-file sync precedence.
 
 To run the complete test suite:
 ```powershell

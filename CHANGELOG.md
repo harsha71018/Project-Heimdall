@@ -5,6 +5,24 @@ All notable changes to Project Heimdall will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-11-14
+
+### Added
+- **Tier-2 AI Semantic Decision Gatekeeper (`ai_gatekeeper.py`)**: Batched LLM validation using OpenRouter free models (`nvidia/nemotron-3-ultra-550b-a55b:free`), with strict string-boolean parsing (`"false"` -> `False`), robust null guards, and fail-open resilience.
+- **Strict Profile Tracker Isolation**: Replaced broad globbing with precise regex in `excel_generator.py` so secondary profile workbooks (e.g. `Tracker_Latest_IT_Support.xlsx`) never contaminate the main tracker ledger.
+- **Conflict Precedence Fix for Stamped Human Edits**: Unchanged stamped cells in a primary workbook can no longer overwrite newer human edits recorded from archive sheets.
+- **Zero-Match Tracker Refresh**: When scraping sources succeed but return zero matching leads, `Tracker_Latest.xlsx` is refreshed with an empty state and fresh timestamp instead of leaving yesterday's stale listings.
+- **Closed-Job Pre-Filter**: Scans description text for `"No longer accepting applications"` and `"Job has expired"`, dropping dead postings before AI or Excel export.
+- **Telemetry Schema v5**: Added `dropped_closed_job` to `RUN_LOG_HEADERS` (15 columns) with full backward compatibility across legacy v1–v4 schemas.
+- **Automated Regression Suite (60 Tests)**: Expanded test suite to 60 automated unit tests covering credential isolation, malformed AI responses, NaN handling, conflict precedence, and profile isolation.
+
+### Fixed
+- **Missing Location Crash**: Fixed `AttributeError: 'float' object has no attribute 'strip'` on NaN location/description values in `extractor.py`.
+- **Credential Separation**: Removed erroneous `GEMINI_API_KEY` fallback in OpenRouter client to prevent credential cross-talk.
+- **Title Filtering Refinement**: Allowed entry-level consulting titles (`Graduate Data Analytics Consultant`, `Associate Consultant`, `Trainee Consultant`) while continuing to reject senior/lead/package consultants.
+- **Atomic Workbook Writes**: `_safe_save` now writes to temporary files before atomic replacement (`os.replace`) to guard against partial or interrupted saves.
+- **Archive Timestamp Collision**: Upgraded archive naming from `%Y-%m-%d_%H%M` to `%Y-%m-%d_%H%M%S`.
+
 ## [1.2.0] - 2026-10-21
 
 ### Added

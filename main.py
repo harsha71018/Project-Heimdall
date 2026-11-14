@@ -22,7 +22,7 @@ RUN_LOG_HEADERS = [
     "timestamp", "mode", "credits_used", "fc_candidates", "fc_markdown_hits",
     "fc_retained", "jobspy_candidates", "jobspy_retained", "total_unique_jobs",
     "dropped_stale_naukri", "dropped_future_naukri", "unparseable_naukri_dates",
-    "dropped_senior_title", "dropped_experience_ceiling"
+    "dropped_senior_title", "dropped_experience_ceiling", "dropped_closed_job"
 ]
 
 # Schemas shipped before the current header list. Existing run_log.csv files MUST
@@ -39,6 +39,12 @@ LEGACY_RUN_LOG_HEADERS = [
     [  # v3 - 13 columns (shipped until jobspy_candidates was added)
         "timestamp", "mode", "credits_used", "fc_candidates", "fc_markdown_hits",
         "fc_retained", "jobspy_retained", "total_unique_jobs",
+        "dropped_stale_naukri", "dropped_future_naukri", "unparseable_naukri_dates",
+        "dropped_senior_title", "dropped_experience_ceiling"
+    ],
+    [  # v4 - 14 columns (shipped until dropped_closed_job was added)
+        "timestamp", "mode", "credits_used", "fc_candidates", "fc_markdown_hits",
+        "fc_retained", "jobspy_candidates", "jobspy_retained", "total_unique_jobs",
         "dropped_stale_naukri", "dropped_future_naukri", "unparseable_naukri_dates",
         "dropped_senior_title", "dropped_experience_ceiling"
     ],
@@ -275,6 +281,12 @@ def main():
             if gatekeeper.is_active:
                 enriched_jobs_df = gatekeeper.filter_dataframe(enriched_jobs_df)
 
+        # Reconcile per-engine retention counts after AI filtering
+        if "_source_engine" in enriched_jobs_df.columns:
+            scraper.last_run_stats["fc_retained"] = int((enriched_jobs_df["_source_engine"] == "firecrawl").sum())
+            scraper.last_run_stats["jobspy_retained"] = int((enriched_jobs_df["_source_engine"] == "jobspy").sum())
+            enriched_jobs_df.drop(columns=["_source_engine"], inplace=True)
+
         # Post-flight Credit Check & Delta Computation
         end_credits = scraper.get_remaining_credits()
         if isinstance(start_credits, int) and isinstance(end_credits, int):
@@ -341,6 +353,10 @@ def main():
                 print("    No platforms could be reached. Please check your internet connection or credentials.")
             else:
                 print("[!] No jobs matching criteria were returned today (zero new leads or all filtered).")
+                # When sources succeeded but produced 0 matching leads, refresh tracker with clean empty state
+                generated_file = dashboard_gen.generate(enriched_jobs_df, output_path=output_filename, run_stats=row_data)
+                scraper.save_seen_jobs()
+                print(f"[+] Output File Refreshed             : {os.path.abspath(generated_file)}")
             print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {stats.get('dropped_unlisted_host', 0)} unlisted-host URLs, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
             print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")
             print(f"    - JobSpy (LinkedIn)             : {jobspy_retained} roles (from {jobspy_candidates} candidates)")

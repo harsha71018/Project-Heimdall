@@ -151,9 +151,23 @@ class ExcelDashboardGenerator:
         primary_raw = []
         if self.stable_filename:
             base, ext = os.path.splitext(self.stable_filename)
-            for p in glob.glob(f"{base}*{ext}"):
-                if os.path.exists(p):
-                    primary_raw.append(p)
+            dir_name = os.path.dirname(self.stable_filename) or "."
+            base_name = os.path.basename(base)
+            # Strictly match stable_filename and its direct lock fallbacks (_Latest, timestamps).
+            # Do NOT match different profile workbooks like Tracker_Latest_IT_Support.xlsx
+            file_pattern = re.compile(
+                rf"^{re.escape(base_name)}(?:_Latest)*(_\d{{8}}_\d{{6}})?{re.escape(ext)}$",
+                re.IGNORECASE
+            )
+            if os.path.isdir(dir_name):
+                try:
+                    for fname in os.listdir(dir_name):
+                        if file_pattern.match(fname):
+                            candidate = os.path.join(dir_name, fname)
+                            if os.path.isfile(candidate):
+                                primary_raw.append(candidate)
+                except OSError:
+                    pass
             if os.path.exists(self.stable_filename) and self.stable_filename not in primary_raw:
                 primary_raw.append(self.stable_filename)
 
@@ -275,6 +289,11 @@ class ExcelDashboardGenerator:
 
             if is_human_edit:
                 existing_meta = ledger.get(key, {})
+                existing_edited_at = existing_meta.get("_edited_at")
+                # If ledger already holds a human edit from another file, only overwrite if current edit is newer or equal
+                if existing_edited_at and source_mtime and source_mtime < existing_edited_at:
+                    continue
+
                 ledger[key] = {
                     "status": status_val if (status_val and status_val != "None") else "Not Applied",
                     "notes": notes_val,
@@ -302,6 +321,12 @@ class ExcelDashboardGenerator:
                 base_notes = baseline[key].get("notes", "")
                 if eff_status == base_status and eff_notes == base_notes:
                     continue
+
+            # CONFLICT RESOLUTION FIX:
+            # If the ledger already holds an active human edit (e.g. from an archive edit), an unchanged
+            # stamped cell in another sheet (such as an untouched primary tracker) must NEVER overwrite it!
+            if key in ledger and ledger[key].get("_edited_at") is not None:
+                continue
 
             is_default_empty = (status_val in ["", "Not Applied", "None"]) and not notes_val
             if is_default_empty:
@@ -424,7 +449,7 @@ class ExcelDashboardGenerator:
             primary_target = output_path
         else:
             os.makedirs(self.leads_dir, exist_ok=True)
-            now_str = datetime.now().strftime("%Y-%m-%d_%H%M")
+            now_str = datetime.now().strftime("%Y-%m-%d_%H%M%S")
             primary_target = os.path.join(self.leads_dir, f"Job_Leads_{now_str}.xlsx")
             save_stable = True
 
@@ -829,8 +854,22 @@ class ExcelDashboardGenerator:
         parent = os.path.dirname(os.path.abspath(output_path))
         if parent:
             os.makedirs(parent, exist_ok=True)
+        def _atomic_write(dest_path: str) -> None:
+            dest_dir = os.path.dirname(os.path.abspath(dest_path)) or "."
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=dest_dir, prefix="wb_tmp_", suffix=".xlsx")
+            os.close(tmp_fd)
+            try:
+                wb.save(tmp_path)
+                os.replace(tmp_path, dest_path)
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+
         try:
-            wb.save(output_path)
+            _atomic_write(output_path)
             return output_path
         except PermissionError:
             base, ext = os.path.splitext(output_path)
@@ -838,9 +877,9 @@ class ExcelDashboardGenerator:
             print(f"\n[!] Warning: '{output_path}' is currently open in Excel.")
             print(f"    Saving clean copy to: '{fallback_path}' instead.")
             try:
-                wb.save(fallback_path)
+                _atomic_write(fallback_path)
                 return fallback_path
             except PermissionError:
                 ts_fallback = f"{base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-                wb.save(ts_fallback)
+                _atomic_write(ts_fallback)
                 return ts_fallback
