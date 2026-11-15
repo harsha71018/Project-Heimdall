@@ -295,7 +295,7 @@ class MultiPlatformJobScraper:
                     verbose=0
                 )
 
-                # Inspect JobSpy per-platform errors in jobs_df.attrs
+                # 1. Inspect and record JobSpy per-platform errors
                 platform_errors = {}
                 if jobs_df is not None and hasattr(jobs_df, "attrs") and isinstance(jobs_df.attrs, dict):
                     platform_errors = jobs_df.attrs.get("errors") or {}
@@ -305,16 +305,20 @@ class MultiPlatformJobScraper:
                     for err_platform, err_msg in platform_errors.items():
                         print(f"   [!] JobSpy platform error on '{err_platform}' for '{title}': {err_msg}")
 
-                # If all requested platforms failed, this query was not successful
+                # 2. Determine query success independently from row processing
+                has_rows = jobs_df is not None and not jobs_df.empty
                 requested_platforms = {str(p).lower() for p in platforms} if platforms else set()
                 failed_platforms = {str(p).lower() for p in platform_errors.keys()}
-                if requested_platforms and requested_platforms.issubset(failed_platforms):
-                    print(f"   [!] All requested platforms failed for '{title}'.")
-                    continue
+                all_requested_failed = bool(requested_platforms and requested_platforms.issubset(failed_platforms))
 
-                self.last_run_stats["jobspy_queries_successful"] = self.last_run_stats.get("jobspy_queries_successful", 0) + 1
+                # Count query as successful if at least one platform succeeded OR if valid jobs were gathered before an error
+                if not all_requested_failed or has_rows:
+                    self.last_run_stats["jobspy_queries_successful"] = self.last_run_stats.get("jobspy_queries_successful", 0) + 1
+                else:
+                    print(f"   [!] All requested platforms failed with zero jobs returned for '{title}'.")
 
-                if jobs_df is not None and not jobs_df.empty:
+                # 3. Process returned rows if any (never discard valid leads returned before a pagination/rate-limit error)
+                if has_rows:
                     self.last_run_stats["jobspy_candidates"] += len(jobs_df)
                     valid_mask = jobs_df.apply(self._row_has_valid_direct_url, axis=1)
                     self.last_run_stats["dropped_unlisted_host"] = self.last_run_stats.get("dropped_unlisted_host", 0) + int((~valid_mask).sum())
@@ -325,7 +329,8 @@ class MultiPlatformJobScraper:
                         all_results.append(clean_df)
                         print(f"   -> Found {len(clean_df)} direct postings for '{title}'.")
                 else:
-                    print(f"   -> No listings found for '{title}'.")
+                    if not all_requested_failed:
+                        print(f"   -> No listings found for '{title}'.")
 
             except Exception as e:
                 self.last_run_stats["jobspy_errors"] += 1

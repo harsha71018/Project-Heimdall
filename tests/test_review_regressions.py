@@ -348,6 +348,36 @@ class ReviewRegressions(unittest.TestCase):
         self.assertEqual(scraper.last_run_stats["jobspy_queries_successful"], 1)
         self.assertEqual(scraper.last_run_stats["jobspy_candidates"], 1)
 
+    @patch("scraper.scrape_jobs")
+    @patch("scraper.time.sleep")
+    def test_jobspy_single_platform_partial_failure_retains_jobs_and_records_error(self, mock_sleep, mock_scrape):
+        """When a single requested platform returns valid jobs alongside a pagination/rate-limit error,
+        the valid jobs must NOT be discarded and the query must count as successful."""
+        df_with_jobs = pd.DataFrame([{
+            "title": "Data Analyst",
+            "company": "Acme",
+            "location": "Hyderabad",
+            "job_url_direct": "https://www.linkedin.com/jobs/view/1234567890",
+            "description": "SQL required 1 year",
+            "site": "linkedin"
+        }])
+        # Simulate page 1 succeeded with 1 lead, but page 2 hit HTTP 429
+        df_with_jobs.attrs = {"errors": {"linkedin": "HTTP 429 Rate Limit on page 2"}}
+        mock_scrape.return_value = df_with_jobs
+
+        cfg = {
+            "search": {"job_titles": ["Data Analyst"], "platforms": ["linkedin"]},
+            "output": {"seen_jobs_file": str(self.root / "seen.json")},
+            "firecrawl": {"enabled": False}
+        }
+        scraper = MultiPlatformJobScraper(cfg)
+        result = scraper.scrape_all_roles()
+
+        self.assertEqual(len(result), 1, "Returned jobs must be preserved despite platform error attribute")
+        self.assertEqual(scraper.last_run_stats["jobspy_candidates"], 1)
+        self.assertEqual(scraper.last_run_stats["jobspy_errors"], 1)
+        self.assertEqual(scraper.last_run_stats["jobspy_queries_successful"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
