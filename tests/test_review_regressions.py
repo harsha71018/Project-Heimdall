@@ -300,6 +300,54 @@ class ReviewRegressions(unittest.TestCase):
     def test_lock_io_error_blocks_run(self):
         self.assertFalse(acquire_run_lock(str(self.root / "missing" / "heimdall.lock")))
 
+    @patch("scraper.scrape_jobs")
+    @patch("scraper.time.sleep")
+    def test_jobspy_platform_error_increments_errors_and_does_not_count_as_successful(self, mock_sleep, mock_scrape):
+        """When JobSpy reports platform errors via df.attrs, count as errors and do NOT increment success."""
+        df_error = pd.DataFrame()
+        df_error.attrs = {"errors": {"linkedin": "HTTP 429 Rate Limit"}}
+        mock_scrape.return_value = df_error
+
+        cfg = {
+            "search": {"job_titles": ["Data Analyst"], "platforms": ["linkedin"]},
+            "output": {"seen_jobs_file": str(self.root / "seen.json")},
+            "firecrawl": {"enabled": False}
+        }
+        scraper = MultiPlatformJobScraper(cfg)
+        result = scraper.scrape_all_roles()
+
+        self.assertTrue(result.empty)
+        self.assertEqual(scraper.last_run_stats["jobspy_errors"], 1)
+        self.assertEqual(scraper.last_run_stats["jobspy_queries_successful"], 0)
+
+    @patch("scraper.scrape_jobs")
+    @patch("scraper.time.sleep")
+    def test_jobspy_partial_platform_error_counts_both_error_and_success(self, mock_sleep, mock_scrape):
+        """When 1 platform fails but another succeeds, record error and mark query successful."""
+        df_partial = pd.DataFrame([{
+            "title": "Data Analyst",
+            "company": "Acme",
+            "location": "Hyderabad",
+            "job_url_direct": "https://www.linkedin.com/jobs/view/1234567890",
+            "description": "SQL required 1 year",
+            "site": "linkedin"
+        }])
+        df_partial.attrs = {"errors": {"indeed": "Cloudflare challenge"}}
+        mock_scrape.return_value = df_partial
+
+        cfg = {
+            "search": {"job_titles": ["Data Analyst"], "platforms": ["linkedin", "indeed"]},
+            "output": {"seen_jobs_file": str(self.root / "seen.json")},
+            "firecrawl": {"enabled": False}
+        }
+        scraper = MultiPlatformJobScraper(cfg)
+        result = scraper.scrape_all_roles()
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(scraper.last_run_stats["jobspy_errors"], 1)
+        self.assertEqual(scraper.last_run_stats["jobspy_queries_successful"], 1)
+        self.assertEqual(scraper.last_run_stats["jobspy_candidates"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

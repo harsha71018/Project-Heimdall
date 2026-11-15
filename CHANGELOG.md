@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Filter closed, stale, and ineligible postings before deduplication so an unusable copy cannot suppress an open counterpart.
 - Evaluate all detected mandatory experience requirements. Description requirements cannot be overwritten by a lower Naukri slug range; preserve relevant excerpts for AI review. The configured upper-range ceiling is unchanged.
 - Replace the age-based lock-file deletion with an OS-held process lock, fail closed on lock I/O errors, and reload freshness state after acquiring the lock. The lock file remains on disk safely after release.
+- Inspect JobSpy per-platform error attributes (`df.attrs['errors']`) so that blocked or rate-limited searches increment `jobspy_errors` and do not falsely count as clean successful queries.
 
 ### Validation
 - Added offline regression coverage for the five review findings, migration backups, repeated workbook edits, and a real child-process crash/recovery scenario.

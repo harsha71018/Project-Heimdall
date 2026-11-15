@@ -294,6 +294,24 @@ class MultiPlatformJobScraper:
                     fetch_description=True,
                     verbose=0
                 )
+
+                # Inspect JobSpy per-platform errors in jobs_df.attrs
+                platform_errors = {}
+                if jobs_df is not None and hasattr(jobs_df, "attrs") and isinstance(jobs_df.attrs, dict):
+                    platform_errors = jobs_df.attrs.get("errors") or {}
+
+                if platform_errors:
+                    self.last_run_stats["jobspy_errors"] += len(platform_errors)
+                    for err_platform, err_msg in platform_errors.items():
+                        print(f"   [!] JobSpy platform error on '{err_platform}' for '{title}': {err_msg}")
+
+                # If all requested platforms failed, this query was not successful
+                requested_platforms = {str(p).lower() for p in platforms} if platforms else set()
+                failed_platforms = {str(p).lower() for p in platform_errors.keys()}
+                if requested_platforms and requested_platforms.issubset(failed_platforms):
+                    print(f"   [!] All requested platforms failed for '{title}'.")
+                    continue
+
                 self.last_run_stats["jobspy_queries_successful"] = self.last_run_stats.get("jobspy_queries_successful", 0) + 1
 
                 if jobs_df is not None and not jobs_df.empty:
