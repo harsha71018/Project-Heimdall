@@ -6,7 +6,6 @@ import tempfile
 import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -848,6 +847,7 @@ class ExcelDashboardGenerator:
                 ("Senior Roles Filtered", sr_dropped),
                 ("Experience Ceiling Filtered (> 2 YOE)", ceil_dropped),
                 ("Closed / Expired Postings Filtered", stats.get("dropped_closed_job", 0)),
+                ("AI Gatekeeper Rejected (Tier-2)", stats.get("dropped_ai_gatekeeper", 0)),
                 ("Final Verified Leads Retained", total_leads_val),
                 ("Firecrawl Credits Consumed", credits_val)
             ]

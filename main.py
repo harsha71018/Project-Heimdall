@@ -250,7 +250,11 @@ def main():
         if not enriched_jobs_df.empty and ai_cfg.get("enabled", True):
             gatekeeper = AIGatekeeper(config)
             if gatekeeper.is_active:
+                pre_ai_count = len(enriched_jobs_df)
                 enriched_jobs_df = gatekeeper.filter_dataframe(enriched_jobs_df)
+                last_dropped = getattr(gatekeeper, "last_dropped_count", None)
+                dropped_ai_count = last_dropped if isinstance(last_dropped, int) else max(0, pre_ai_count - len(enriched_jobs_df))
+                scraper.last_run_stats["dropped_ai_gatekeeper"] = dropped_ai_count
 
         # Reconcile per-engine retention counts after AI filtering
         if "_source_engine" in enriched_jobs_df.columns:
@@ -300,6 +304,7 @@ def main():
             "dropped_senior_title": dropped_senior_title,
             "dropped_experience_ceiling": dropped_experience_ceiling,
             "dropped_closed_job": stats.get("dropped_closed_job", 0),
+            "dropped_ai_gatekeeper": stats.get("dropped_ai_gatekeeper", 0),
         }
 
         log_updated = migrate_and_append_run_log(log_file, row_data)
@@ -329,7 +334,7 @@ def main():
                 generated_file = dashboard_gen.generate(enriched_jobs_df, output_path=output_filename, run_stats=row_data)
                 scraper.save_seen_jobs()
                 print(f"[+] Output File Refreshed             : {os.path.abspath(generated_file)}")
-            print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {stats.get('dropped_unlisted_host', 0)} unlisted-host URLs, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
+            print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {stats.get('dropped_closed_job', 0)} closed, {stats.get('dropped_ai_gatekeeper', 0)} AI-rejected, {stats.get('dropped_unlisted_host', 0)} unlisted-host URLs, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
             print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")
             print(f"    - JobSpy (LinkedIn)             : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
             print(f"[+] Firecrawl Credit Audit              : {credit_audit_str}")
@@ -350,7 +355,7 @@ def main():
         print(f"[+] SUCCESS! Total Active Opportunities Aggregated: {total_unique}")
         print(f"    - Firecrawl (Naukri / Verified) : {fc_retained} roles (from {fc_candidates} SERP candidates, {fc_markdown_hits} markdown hits)")
         print(f"    - JobSpy (LinkedIn)             : {jobspy_retained} roles (from {jobspy_candidates} candidates)")
-        print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {stats.get('dropped_unlisted_host', 0)} unlisted-host URLs, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
+        print(f"    - Funnel Filter Drops           : {dropped_senior_title} senior, {dropped_experience_ceiling} ceiling, {stats.get('dropped_closed_job', 0)} closed, {stats.get('dropped_ai_gatekeeper', 0)} AI-rejected, {stats.get('dropped_unlisted_host', 0)} unlisted-host URLs, {dropped_stale_naukri} stale Naukri, {dropped_future_naukri} future Naukri ({unparseable_naukri_dates} unparseable retained)")
         print(f"[+] Firecrawl Credit Audit              : {credit_audit_str}")
         print(f"[+] Output File                         : {os.path.abspath(generated_file)}")
         print(log_status_str)

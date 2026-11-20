@@ -2,13 +2,12 @@ import os
 import re
 import json
 import time
-import logging
 import tempfile
 import requests
 import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
-from urllib.parse import urlsplit, urlunsplit, parse_qs, parse_qsl, urlencode
+from urllib.parse import urlsplit, parse_qs
 from dotenv import load_dotenv
 from jobspy import scrape_jobs
 from extractor import JobRequirementExtractor
@@ -258,6 +257,7 @@ class MultiPlatformJobScraper:
         self.last_run_stats["dropped_senior_title"] = 0
         self.last_run_stats["dropped_experience_ceiling"] = 0
         self.last_run_stats["dropped_unlisted_host"] = 0
+        self.last_run_stats["dropped_closed_job"] = 0
 
         all_results = []
 
@@ -729,7 +729,12 @@ class MultiPlatformJobScraper:
     def _extract_location_from_metadata(self, url: str, text: str, default_loc: str) -> str:
         """Extracts confirmed city from URL slug or text, falling back to search location."""
         combined = f"{url.lower()} {text.lower()}"
-        for city in self.KNOWN_CITIES:
+        if default_loc:
+            cleaned_default = default_loc.strip().lower()
+            if cleaned_default and cleaned_default not in ('india', 'hybrid', 'remote'):
+                if re.search(rf'\b{re.escape(cleaned_default)}\b', combined):
+                    return default_loc
+        for city in sorted(self.KNOWN_CITIES):
             if city in ('india', 'hybrid', 'remote'):
                 continue
             if re.search(rf'\b{re.escape(city)}\b', combined):
@@ -1079,7 +1084,7 @@ class MultiPlatformJobScraper:
             else:
                 final_url_str = u_direct or u_job or ""
 
-            # Finding: Drop stale Naukri postings older than 14 days
+            # Finding: Drop stale Naukri postings older than configured lookback window (dynamic based on hours_old)
             naukri_date = None
             date_status = None
             final_host = (urlsplit(final_url_str).hostname or "").lower() if final_url_str else ""

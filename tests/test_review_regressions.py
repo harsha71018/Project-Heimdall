@@ -378,6 +378,100 @@ class ReviewRegressions(unittest.TestCase):
         self.assertEqual(scraper.last_run_stats["jobspy_errors"], 1)
         self.assertEqual(scraper.last_run_stats["jobspy_queries_successful"], 1)
 
+    def test_extract_location_prefers_default_and_is_deterministic(self):
+        """Verify _extract_location_from_metadata prefers default_loc if matched,
+        and otherwise selects deterministically from sorted KNOWN_CITIES."""
+        scraper = MultiPlatformJobScraper(self.config)
+
+        # Multi-city slug containing pune, hyderabad, and bengaluru
+        slug = "https://www.naukri.com/job-listings-data-analyst-acme-pune-hyderabad-bengaluru-0-to-2-years-1234567890"
+
+        # 1. When default_loc='Hyderabad' is present in slug, it must be preferred
+        loc = scraper._extract_location_from_metadata(slug, "Data Analyst opening", default_loc="Hyderabad")
+        self.assertEqual(loc, "Hyderabad")
+
+        # 2. When default_loc='Chennai' is NOT in slug, it must deterministically pick Bengaluru
+        # ('bengaluru' is first alphabetically among bengaluru, hyderabad, pune)
+        loc2 = scraper._extract_location_from_metadata(slug, "Data Analyst opening", default_loc="Chennai")
+        self.assertEqual(loc2, "Bengaluru")
+
+        # 3. When default_loc is generic 'India', it shouldn't match as a city and should pick Bengaluru
+        loc3 = scraper._extract_location_from_metadata(slug, "Data Analyst opening", default_loc="India")
+        self.assertEqual(loc3, "Bengaluru")
+
+        # 4. When no known city matches anywhere, fall back to default_loc
+        loc_fallback = scraper._extract_location_from_metadata("https://example.com/job/1", "text", default_loc="Mysore")
+        self.assertEqual(loc_fallback, "Mysore")
+
+    @patch("scraper.scrape_jobs")
+    def test_dropped_closed_job_resets_across_runs(self, mock_scrape):
+        """Verify dropped_closed_job counter resets to 0 at the start of scrape_all_roles."""
+        mock_scrape.return_value = pd.DataFrame()
+        cfg = {
+            "search": {"job_titles": ["Data Analyst"], "platforms": ["linkedin"]},
+            "output": {"seen_jobs_file": str(self.root / "seen.json")},
+            "firecrawl": {"enabled": False}
+        }
+        scraper = MultiPlatformJobScraper(cfg)
+        scraper.last_run_stats["dropped_closed_job"] = 12
+        scraper.scrape_all_roles()
+        self.assertEqual(scraper.last_run_stats["dropped_closed_job"], 0)
+
+    @patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key-abc"}, clear=False)
+    @patch("requests.post")
+    def test_ai_gatekeeper_prompt_and_referer_dynamic(self, mock_post):
+        """Verify AIGatekeeper reflects custom max_experience_years, location,
+        correct project referer, and tracks last_dropped_count."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "decisions": [
+                            {"id": 0, "is_fresher_eligible": False, "is_domain_match": True, "fit_score": 4.0, "reason": "Requires 5 YOE"}
+                        ]
+                    })
+                }
+            }]
+        }
+        mock_post.return_value = mock_response
+
+        cfg = {
+            "ai_gatekeeper": {"enabled": True, "model": "test/model:free"},
+            "search": {
+                "job_titles": ["Data Engineer"],
+                "max_experience_years": 4,
+                "location": "Germany"
+            }
+        }
+        gatekeeper = AIGatekeeper(cfg)
+        df = pd.DataFrame([{
+            "title": "Senior Data Engineer",
+            "company": "Tech Corp",
+            "extracted_experience": "5 Years",
+            "location": "Berlin",
+            "description": "5+ years required."
+        }])
+
+        filtered_df = gatekeeper.filter_dataframe(df)
+
+        self.assertTrue(filtered_df.empty)
+        self.assertEqual(gatekeeper.last_dropped_count, 1)
+
+        # Inspect API call args
+        self.assertTrue(mock_post.called)
+        kwargs = mock_post.call_args[1]
+        headers = kwargs["headers"]
+        self.assertEqual(headers.get("HTTP-Referer"), "https://github.com/harsha71018/Project-Heimdall")
+
+        payload = kwargs["json"]
+        system_content = payload["messages"][0]["content"]
+        self.assertIn("entry-level (0-4 YOE) staffing in Germany", system_content)
+        self.assertIn("strictly <= 4 years of experience", system_content)
+        self.assertIn("0-4 years", system_content)
+        self.assertIn(">4 years", system_content)
+
 
 if __name__ == "__main__":
     unittest.main()

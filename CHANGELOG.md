@@ -5,18 +5,24 @@ All notable changes to Project Heimdall will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.4.0] - 2026-11-20
+
+### Added
+- **Deterministic City Extraction (`scraper.py`)**: Prioritized configured `default_loc` search location before checking known cities, and sorted `KNOWN_CITIES` to eliminate Python process-level hash seed randomization on multi-city Naukri listings.
+- **Dynamic AI Gatekeeper Prompts & Correct Referer (`ai_gatekeeper.py`)**: Config-driven system prompt dynamically references `max_experience_years` and `search.location`, and updated `HTTP-Referer` to `https://github.com/harsha71018/Project-Heimdall`.
+- **Telemetry & Run Summary Tracking for AI Rejections (`main.py`, `excel_generator.py`)**: Captured and recorded `dropped_ai_gatekeeper` across run stats, console funnel output, and Excel Tab 3 (`Run Summary`).
+- **POSIX Flock CI Coverage (`.github/workflows/tests.yml`)**: Added `ubuntu-latest` Python 3.12 CI job alongside Windows matrix to ensure both `msvcrt.locking` and `fcntl.flock` run lock implementations are verified automatically.
 
 ### Fixed
-- Sync Excel status and notes independently, with per-field conflict timestamps and per-workbook edit observations to prevent replaying earlier edits on later saves.
-- Normalize LinkedIn, Naukri, and Indeed URL variants by native job ID. Migrate application and freshness ledgers with original-file backups, preserve conflicting application records, and recognize old workbook stamps.
-- Filter closed, stale, and ineligible postings before deduplication so an unusable copy cannot suppress an open counterpart.
-- Evaluate all detected mandatory experience requirements. Description requirements cannot be overwritten by a lower Naukri slug range; preserve relevant excerpts for AI review. The configured upper-range ceiling is unchanged.
-- Replace the age-based lock-file deletion with an OS-held process lock, fail closed on lock I/O errors, and reload freshness state after acquiring the lock. The lock file remains on disk safely after release.
-- Inspect JobSpy per-platform error attributes (`df.attrs['errors']`) so that blocked or rate-limited searches increment `jobspy_errors` and do not falsely count as clean successful queries.
+- **Counter Reset for Closed Jobs (`scraper.py`)**: Added `dropped_closed_job = 0` to `scrape_all_roles()` counter reset block to prevent cumulative drift across consecutive runs, and surfaced closed drops in console funnel output.
+- **JobSpy Partial Pagination Errors**: Preserved valid returned leads even when per-platform error attributes (`df.attrs['errors']`) indicate secondary page failures, recording platform errors without dropping collected jobs.
+- **Independent Application Sync & Native Job ID Migration**: Sync Excel status and notes independently with per-field conflict timestamps; normalize LinkedIn, Naukri, and Indeed URL variants by native job ID with byte-preserving backups.
+- **Pre-Dedup Filtering & Experience Evaluation**: Filter closed and ineligible postings before deduplication, and evaluate all detected mandatory experience requirements against configured ceilings.
+- **Dead Import Cleanup**: Removed unused imports across `scraper.py`, `ai_gatekeeper.py`, and `excel_generator.py`.
+- **Documentation & Test Count Sync (`README.md`)**: Updated verified test count to 89, corrected dynamic Naukri lookback description, LinkedIn listing count, and timestamp format with seconds.
 
 ### Validation
-- Added offline regression coverage for the five review findings, migration backups, repeated workbook edits, and a real child-process crash/recovery scenario.
+- Expanded test suite to 89 automated unit and acceptance tests covering deterministic location selection, counter resets, dynamic AI prompts, and JobSpy partial-failure pagination retention.
 
 ## [1.3.0] - 2026-11-14
 

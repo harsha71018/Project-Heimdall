@@ -100,14 +100,14 @@ flowchart TD
    - Remembers previously seen jobs in `seen_jobs.json` with a 45-day rolling retention window.
    - New listings are highlighted as **`🟢 NEW`** (Bold Green).
    - Repeated listings from earlier runs are tagged as **`⚪ SEEN`** (Slate Gray).
-   - Naukri listings older than 14 days decoded from URL slugs are automatically dropped.
+   - Naukri listings older than the configured lookback window (scales dynamically with `hours_old`: `max(1, (hours_old + 12) // 24)` days, 1 day by default for 24h) decoded from URL slugs are automatically dropped.
 4. **Interactive Triple-Tab Excel Output & Persistent Memory**:
    - Clickable native **"Apply Now"** buttons jump straight to the application page.
    - Application Status dropdowns with 10 options: `Not Applied`, `Applied`, `Referral Requested`, `Screening Call`, `Interviewing`, `Assessment`, `Rejected`, `Offer Received`, **`Ignored`** (slate-gray), and **`Not Accepting Applications`** (crimson).
    - **Persistent Memory**: Status and notes sync independently. Only conflicting edits to the same field use workbook modification time; previously consumed edits are not replayed when another field changes. Legacy unstamped workbooks retain their existing precedence rules.
    - **Stable Job Identity**: LinkedIn, Naukri, and Indeed URL variants share a native job ID while Apply Now keeps the original link. Existing ledger keys migrate automatically, with byte-preserving `.identity-*.bak` backups. Colliding application records remain recoverable in `_identity_conflicts`; field timestamps select the active values. Backups contain personal tracking data and remain gitignored.
    - **Run Ownership**: The operating system holds the run lock until exit, even beyond 30 minutes, and releases it after a crash. `heimdall.lock` normally remains on disk; its presence alone does not mean a run is active. An inaccessible lock blocks the run with exit code 2.
-   - **Dual Output**: Generates both a timestamped archive in `leads/` (e.g. `leads/Job_Leads_2026-10-14_0110.xlsx`) and the stable desktop anchor `Tracker_Latest.xlsx`.
+   - **Dual Output**: Generates both a timestamped archive in `leads/` (e.g. `leads/Job_Leads_2026-10-14_011000.xlsx`) and the stable desktop anchor `Tracker_Latest.xlsx`.
    - **Tab 2: Applied & In Progress**: Permanent Kanban board tracking active applications across all past and future runs. Postings marked as `Ignored` or `Not Accepting Applications` are automatically excluded to keep your active pipeline clean.
    - **Tab 3: Run Summary**: Full audit table displaying raw candidates, filter drops (including closed postings), and credit consumption.
    - **Protected Against File Locks**: If open in Excel, saves safely to `_Latest.xlsx` without crashing.
@@ -281,14 +281,14 @@ Auto-selecting [1] in 5 seconds...
 
 > [!TIP]
 > **CLI Ergonomics (`--mode deep`):**
-> `--mode deep` is an intuitive CLI alias for `--mode exhaustive` (e.g., `run.bat deep` or `py main.py --mode deep`). Both invoke the exact same comprehensive engine parameters: 10 full-page markdown scrapes per role on Naukri and 15 listings per role on LinkedIn.
+> `--mode deep` is an intuitive CLI alias for `--mode exhaustive` (e.g., `run.bat deep` or `py main.py --mode deep`). Both invoke the exact same comprehensive engine parameters: 10 full-page markdown scrapes per role on Naukri and 14 listings per role on LinkedIn.
 
 ---
 
 ## 📊 Understanding the Triple-Tab Excel Tracker
 
 Every run generates both:
-1. **Timestamped Archive**: `leads/Job_Leads_YYYY-MM-DD_HHMM.xlsx`
+1. **Timestamped Archive**: `leads/Job_Leads_YYYY-MM-DD_HHMMSS.xlsx`
 2. **Stable Desktop Anchor**: `Tracker_Latest.xlsx`
 
 ### Tab 1: Active Job Leads
@@ -365,7 +365,7 @@ Project-Heimdall/
 ├── config.yaml               # User search configuration, skills, and mode parameters
 ├── requirements.txt          # Python dependency requirements (tested minimum bounds)
 ├── .env.example              # Template for API keys
-├── .env                      # [PRIVATE] Live Firecrawl API key
+├── .env                      # [PRIVATE] Live Firecrawl and OpenRouter API keys
 ├── .gitignore                # Protects credentials, logs, and personal outputs
 ├── LICENSE                   # Open-source MIT License
 ├── CHANGELOG.md              # Detailed version history and release audit log
@@ -408,7 +408,7 @@ Project-Heimdall/
 
 ## 🧪 Testing & Production Verification
 
-The entire codebase is verified by **64 automated unit and acceptance tests** covering URL validation, date bounds, ceiling range-blanking, closed posting detection, AI fail-open classification, string-boolean and NaN sanitization, conflict precedence preservation, atomic persistence, formula injection protection, hidden provenance stamps, Kanban memory persistence, multi-tab sync, archive resurrection prevention, post-AI source count reconciliation, source failure classification, malformed-response handling, and multi-file sync precedence.
+The entire codebase is verified by **89 automated unit and acceptance tests** covering URL validation, date bounds, ceiling range-blanking, closed posting detection, AI fail-open classification, string-boolean and NaN sanitization, conflict precedence preservation, atomic persistence, formula injection protection, hidden provenance stamps, Kanban memory persistence, multi-tab sync, archive resurrection prevention, post-AI source count reconciliation, source failure classification, malformed-response handling, deterministic location resolution, and multi-file sync precedence.
 
 To run the complete test suite:
 ```powershell

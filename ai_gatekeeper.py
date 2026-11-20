@@ -8,7 +8,7 @@ import os
 import json
 import re
 import math
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 import requests
 import pandas as pd
 
@@ -48,6 +48,8 @@ class AIGatekeeper:
         self.min_fit_score = float(self.ai_cfg.get("min_fit_score", 6.0))
         self.target_titles = config.get("search", {}).get("job_titles", ["Data Analyst", "SQL Developer"])
         self.max_experience_years = config.get("search", {}).get("max_experience_years", 2)
+        self.location = config.get("search", {}).get("location", "India")
+        self.last_dropped_count = 0
 
     @staticmethod
     def _parse_bool(val: Any, default: bool = True) -> bool:
@@ -84,6 +86,7 @@ class AIGatekeeper:
         return bool(self.enabled and self.api_key)
 
     def filter_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        self.last_dropped_count = 0
         if df.empty:
             return df
 
@@ -113,11 +116,11 @@ class AIGatekeeper:
 
         roles_str = ", ".join(self.target_titles)
         system_prompt = (
-            "You are an expert technical recruiter specializing in entry-level (0-2 YOE) staffing in India.\n"
+            f"You are an expert technical recruiter specializing in entry-level (0-{self.max_experience_years} YOE) staffing in {self.location}.\n"
             f"Target roles wanted: {roles_str}.\n"
             f"Candidate ceiling: strictly <= {self.max_experience_years} years of experience.\n"
             "Evaluate each job listing:\n"
-            "- is_fresher_eligible (bool): true if a fresher/junior (0-2 years) is genuinely eligible. false if the role asks for >2 years, is a Senior/Lead/Architect role, SME, or lateral hire.\n"
+            f"- is_fresher_eligible (bool): true if a fresher/junior (0-{self.max_experience_years} years) is genuinely eligible. false if the role asks for >{self.max_experience_years} years, is a Senior/Lead/Architect role, SME, or lateral hire.\n"
             f"- is_domain_match (bool): true if this role genuinely matches one of the target domains ({roles_str}). false if non-technical, sales, telecalling, customer support, or off-domain.\n"
             "- fit_score (float 1-10): rate match against entry-level target role.\n"
             "- reason (str): short 1-sentence explanation.\n\n"
@@ -130,7 +133,7 @@ class AIGatekeeper:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/Antigravity",
+            "HTTP-Referer": "https://github.com/harsha71018/Project-Heimdall",
             "X-Title": "Project Heimdall Job Hunter"
         }
 
@@ -206,6 +209,7 @@ class AIGatekeeper:
                 else:
                     dropped_count += 1
 
+            self.last_dropped_count = dropped_count
             retained_df = df.loc[keep_indices].copy()
             print(f"[+] [AI Gatekeeper] Retained {len(retained_df)} verified leads (Dropped {dropped_count} experienced/off-domain leads).")
             return retained_df
